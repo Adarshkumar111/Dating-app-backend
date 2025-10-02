@@ -21,9 +21,9 @@ export async function getChatByUserId(req, res) {
       chat = await Chat.findById(chat._id).populate('users', 'name profilePhoto');
     }
 
-    // Filter messages deleted by current user
+    // Filter messages deleted by current user (but keep deletedForEveryone to show indicator)
     const filteredMessages = chat.messages
-      .filter(m => !m.deletedForEveryone && !m.deletedFor.some(id => String(id) === String(currentUserId)))
+      .filter(m => !m.deletedFor.some(id => String(id) === String(currentUserId)))
       .map(m => ({
         _id: m._id,
         text: m.text,
@@ -33,6 +33,7 @@ export async function getChatByUserId(req, res) {
         sender: m.sender,
         sentAt: m.sentAt,
         reactions: m.reactions || [],
+        deletedForEveryone: m.deletedForEveryone || false,
         fromSelf: String(m.sender) === String(currentUserId)
       }));
 
@@ -54,9 +55,9 @@ export async function getMessages(req, res) {
   if (!chat.users.some(u => String(u) === String(req.user._id))) return res.status(403).json({ message: 'Not in chat' });
   if (chat.isBlocked) return res.status(403).json({ message: 'Chat blocked' });
   
-  // Filter deleted messages
+  // Filter deleted messages (but keep deletedForEveryone to show indicator)
   const filteredMessages = chat.messages
-    .filter(m => !m.deletedForEveryone && !m.deletedFor.some(id => String(id) === String(req.user._id)))
+    .filter(m => !m.deletedFor.some(id => String(id) === String(req.user._id)))
     .map(m => ({
       _id: m._id,
       text: m.text,
@@ -66,6 +67,7 @@ export async function getMessages(req, res) {
       sender: m.sender,
       sentAt: m.sentAt,
       reactions: m.reactions || [],
+      deletedForEveryone: m.deletedForEveryone || false,
       fromSelf: String(m.sender) === String(req.user._id)
     }));
   
@@ -141,6 +143,8 @@ export async function deleteMessage(req, res) {
       }
       
       message.deletedForEveryone = true;
+      message.text = ''; // Clear text
+      message.mediaUrl = null; // Clear media
       
       // Emit delete event to all users in chat
       req.io.to(req.params.chatId).emit('messageDeleted', { messageId, deleteType: 'forEveryone' });
@@ -218,13 +222,52 @@ export async function uploadMedia(req, res) {
     const chat = await Chat.findById(req.params.chatId);
     if (!chat) return res.status(404).json({ message: 'Chat not found' });
     if (!chat.users.some(u => String(u) === String(req.user._id))) return res.status(403).json({ message: 'Not in chat' });
+    if (chat.isBlocked) return res.status(403).json({ message: 'Chat blocked' });
     
     if (!req.file) return res.status(400).json({ message: 'No file uploaded' });
     
     const { uploadToImageKit } = await import('../utils/imageUtil.js');
     const mediaUrl = await uploadToImageKit(req.file, 'matrimonial/chat');
     
-    res.json({ ok: true, mediaUrl });
+    // Determine message type based on MIME type
+    let messageType = 'image';
+    if (req.file.mimetype.startsWith('video/')) {
+      messageType = 'video';
+    } else if (req.file.mimetype.startsWith('audio/')) {
+      messageType = 'voice';
+    }
+    
+    // Create message with media
+    const message = {
+      sender: req.user._id,
+      text: '',
+      messageType,
+      mediaUrl,
+      mediaDuration: req.body.duration ? parseFloat(req.body.duration) : null,
+      sentAt: new Date(),
+      deletedFor: [],
+      deletedForEveryone: false,
+      reactions: []
+    };
+    
+    chat.messages.push(message);
+    await chat.save();
+    
+    // Emit to socket room
+    const messageData = {
+      _id: chat.messages[chat.messages.length - 1]._id,
+      sender: req.user._id,
+      text: message.text,
+      messageType: message.messageType,
+      mediaUrl: message.mediaUrl,
+      mediaDuration: message.mediaDuration,
+      sentAt: message.sentAt,
+      reactions: []
+    };
+    
+    req.io.to(req.params.chatId).emit('message', messageData);
+    
+    res.json({ ok: true, mediaUrl, message: messageData });
   } catch (e) {
     console.error('Upload media error:', e);
     res.status(400).json({ message: e.message });
