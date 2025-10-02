@@ -32,6 +32,8 @@ export async function getChatByUserId(req, res) {
         mediaDuration: m.mediaDuration,
         sender: m.sender,
         sentAt: m.sentAt,
+        deliveredTo: m.deliveredTo || [],
+        seenBy: m.seenBy || [],
         reactions: m.reactions || [],
         deletedForEveryone: m.deletedForEveryone || false,
         fromSelf: String(m.sender) === String(currentUserId)
@@ -66,6 +68,8 @@ export async function getMessages(req, res) {
       mediaDuration: m.mediaDuration,
       sender: m.sender,
       sentAt: m.sentAt,
+      deliveredTo: m.deliveredTo || [],
+      seenBy: m.seenBy || [],
       reactions: m.reactions || [],
       deletedForEveryone: m.deletedForEveryone || false,
       fromSelf: String(m.sender) === String(req.user._id)
@@ -90,6 +94,8 @@ export async function sendMessage(req, res) {
       mediaUrl: mediaUrl || null,
       mediaDuration: mediaDuration || null,
       sentAt: new Date(),
+      deliveredTo: [],
+      seenBy: [],
       deletedFor: [],
       deletedForEveryone: false,
       reactions: []
@@ -107,6 +113,8 @@ export async function sendMessage(req, res) {
       mediaUrl: message.mediaUrl,
       mediaDuration: message.mediaDuration,
       sentAt: message.sentAt,
+      deliveredTo: [],
+      seenBy: [],
       reactions: []
     };
     
@@ -245,6 +253,8 @@ export async function uploadMedia(req, res) {
       mediaUrl,
       mediaDuration: req.body.duration ? parseFloat(req.body.duration) : null,
       sentAt: new Date(),
+      deliveredTo: [],
+      seenBy: [],
       deletedFor: [],
       deletedForEveryone: false,
       reactions: []
@@ -262,6 +272,8 @@ export async function uploadMedia(req, res) {
       mediaUrl: message.mediaUrl,
       mediaDuration: message.mediaDuration,
       sentAt: message.sentAt,
+      deliveredTo: [],
+      seenBy: [],
       reactions: []
     };
     
@@ -270,6 +282,62 @@ export async function uploadMedia(req, res) {
     res.json({ ok: true, mediaUrl, message: messageData });
   } catch (e) {
     console.error('Upload media error:', e);
+    res.status(400).json({ message: e.message });
+  }
+}
+
+export async function markMessagesAsSeen(req, res) {
+  try {
+    const chat = await Chat.findById(req.params.chatId);
+    if (!chat) return res.status(404).json({ message: 'Chat not found' });
+    if (!chat.users.some(u => String(u) === String(req.user._id))) return res.status(403).json({ message: 'Not in chat' });
+    
+    // Mark all messages from other users as seen
+    let updated = false;
+    chat.messages.forEach(msg => {
+      if (String(msg.sender) !== String(req.user._id) && !msg.seenBy.includes(req.user._id)) {
+        msg.seenBy.push(req.user._id);
+        updated = true;
+      }
+    });
+    
+    if (updated) {
+      await chat.save();
+      // Emit seen status to other users
+      req.io.to(req.params.chatId).emit('messagesSeen', { userId: req.user._id });
+    }
+    
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('Mark seen error:', e);
+    res.status(400).json({ message: e.message });
+  }
+}
+
+export async function markMessagesAsDelivered(req, res) {
+  try {
+    const chat = await Chat.findById(req.params.chatId);
+    if (!chat) return res.status(404).json({ message: 'Chat not found' });
+    if (!chat.users.some(u => String(u) === String(req.user._id))) return res.status(403).json({ message: 'Not in chat' });
+    
+    // Mark all messages from other users as delivered
+    let updated = false;
+    chat.messages.forEach(msg => {
+      if (String(msg.sender) !== String(req.user._id) && !msg.deliveredTo.includes(req.user._id)) {
+        msg.deliveredTo.push(req.user._id);
+        updated = true;
+      }
+    });
+    
+    if (updated) {
+      await chat.save();
+      // Emit delivered status to other users
+      req.io.to(req.params.chatId).emit('messagesDelivered', { userId: req.user._id });
+    }
+    
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('Mark delivered error:', e);
     res.status(400).json({ message: e.message });
   }
 }

@@ -12,6 +12,8 @@ const messageSchema = new mongoose.Schema({
   mediaUrl: { type: String }, // URL for image/video/voice
   mediaDuration: { type: Number }, // Duration in seconds for video/voice
   sentAt: { type: Date, default: Date.now },
+  deliveredTo: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }], // Users who received the message
+  seenBy: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }], // Users who saw the message
   deletedFor: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
   deletedForEveryone: { type: Boolean, default: false },
   reactions: [reactionSchema]
