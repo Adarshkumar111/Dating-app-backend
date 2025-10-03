@@ -17,7 +17,7 @@ const userSchema = new mongoose.Schema({
   about: String,
   profilePhoto: String, // hidden until connected
   galleryImages: [{ type: String }], // up to 8 images, hidden until connected
-  status: { type: String, enum: ['pending', 'approved'], default: 'pending' },
+  status: { type: String, enum: ['pending', 'approved', 'blocked'], default: 'pending' },
   isPremium: { type: Boolean, default: false },
   premiumExpiresAt: { type: Date },
   requestsToday: { type: Number, default: 0 },

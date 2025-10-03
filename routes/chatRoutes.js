@@ -1,19 +1,16 @@
 import { Router } from 'express';
+import { getChatBetween, sendMessage, deleteMessage, addReaction, uploadMedia, markMessagesAsSeen, markMessagesAsDelivered, blockChat, unblockChat } from '../controllers/chatController.js';
 import { authRequired, approvedOnly } from '../middleware/authMiddleware.js';
-import { upload } from '../utils/imageUtil.js';
-import { getChatByUserId, getMessages, sendMessage, deleteMessage, addReaction, uploadMedia, markMessagesAsSeen, markMessagesAsDelivered, blockChat, unblockChat } from '../controllers/chatController.js';
+import multer from 'multer';
 
+const upload = multer({ dest: 'uploads/temp' });
 const router = Router();
 router.use(authRequired, approvedOnly);
 
-// Get or create chat with another user
-router.get('/with/:userId', getChatByUserId);
-
-// Chat routes (by chatId)
-router.get('/:chatId/messages', getMessages);
+router.get('/with/:userId', getChatBetween);
 router.post('/:chatId/send', sendMessage);
-router.post('/:chatId/delete-message', deleteMessage);
-router.post('/:chatId/reaction', addReaction);
+router.post('/:chatId/delete', deleteMessage);
+router.post('/:chatId/react', addReaction);
 router.post('/:chatId/upload', upload.single('media'), uploadMedia);
 router.post('/:chatId/seen', markMessagesAsSeen);
 router.post('/:chatId/delivered', markMessagesAsDelivered);

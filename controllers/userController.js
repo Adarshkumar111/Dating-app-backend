@@ -9,14 +9,26 @@ export async function me(req, res) {
   res.json(u);
 }
 
-// Instagram-style feed with rejected users excluded
+// Instagram-style feed with rejected users and accepted friends excluded
 export async function list(req, res) {
   const gender = req.user.gender === 'male' ? 'female' : 'male';
   const page = parseInt(req.query.page || '1');
   const pageSize = 10;
   
-  // Exclude rejected users and self
-  const excludeIds = [...(req.user.rejectedUsers || []), req.user._id];
+  // Get accepted friends to exclude from discover
+  const acceptedRequests = await Request.find({
+    $or: [
+      { from: req.user._id, status: 'accepted' },
+      { to: req.user._id, status: 'accepted' }
+    ]
+  });
+  
+  const friendIds = acceptedRequests.map(r => 
+    String(r.from) === String(req.user._id) ? r.to : r.from
+  );
+  
+  // Exclude rejected users, self, and accepted friends
+  const excludeIds = [...(req.user.rejectedUsers || []), req.user._id, ...friendIds];
   
   const [items, total] = await Promise.all([
     User.find({ 
@@ -50,16 +62,15 @@ export async function list(req, res) {
     obj.email = undefined;
     obj.itCardPhoto = undefined;
     
-    // Hide details until connected
+    // Hide details until connected (but keep name visible)
     if (!request || request.status !== 'accepted') {
-      obj.name = obj.name ? obj.name.charAt(0).toUpperCase() : 'U';
       obj.profilePhoto = undefined;
       obj.galleryImages = undefined;
       obj.age = undefined;
       obj.location = undefined;
       obj.education = undefined;
       obj.occupation = undefined;
-      // Keep 'about' visible
+      // Keep 'name' and 'about' visible
     }
     
     obj.requestStatus = request ? request.status : 'none';
@@ -69,6 +80,66 @@ export async function list(req, res) {
   }));
   
   res.json({ items: itemsWithStatus, total, page, pageSize });
+}
+
+// Get accepted friends list with unread message count
+export async function getFriends(req, res) {
+  try {
+    const Chat = (await import('../models/Chat.js')).default;
+    
+    // Find all accepted requests
+    const acceptedRequests = await Request.find({
+      $or: [
+        { from: req.user._id, status: 'accepted' },
+        { to: req.user._id, status: 'accepted' }
+      ]
+    }).populate('from to', 'name profilePhoto about age location');
+    
+    const friendsData = await Promise.all(acceptedRequests.map(async (request) => {
+      // Get the other user
+      const friend = String(request.from._id) === String(req.user._id) ? request.to : request.from;
+      
+      // Find chat between users
+      const chat = await Chat.findOne({
+        users: { $all: [req.user._id, friend._id] }
+      });
+      
+      let unreadCount = 0;
+      let isBlocked = false;
+      let blockedBy = null;
+      
+      if (chat) {
+        // Count unread messages (not seen by current user and not sent by current user)
+        unreadCount = chat.messages.filter(m => 
+          String(m.sender) !== String(req.user._id) && 
+          !m.seenBy.includes(req.user._id) &&
+          !m.deletedFor.includes(req.user._id) &&
+          !m.deletedForEveryone
+        ).length;
+        
+        isBlocked = chat.isBlocked;
+        blockedBy = chat.blockedBy;
+      }
+      
+      return {
+        _id: friend._id,
+        name: friend.name,
+        profilePhoto: friend.profilePhoto,
+        about: friend.about,
+        age: friend.age,
+        location: friend.location,
+        unreadCount,
+        isBlocked,
+        blockedBy: blockedBy ? String(blockedBy) : null,
+        chatId: chat?._id
+      };
+    }));
+    
+    res.json({ friends: friendsData });
+  } catch (e) {
+    console.error('Get friends error:', e);
+    res.status(400).json({ message: e.message });
+  }
 }
 
 export async function getProfile(req, res) {
@@ -94,16 +165,15 @@ export async function getProfile(req, res) {
     data.itCardPhoto = undefined;
   }
   
-  // Privacy: hide additional data until connected
+  // Privacy: hide additional data until connected (but keep name visible)
   if (!connection && !isOwnProfile && !isAdmin) {
-    data.name = data.name ? data.name.charAt(0).toUpperCase() : 'U';
     data.profilePhoto = undefined;
     data.galleryImages = undefined;
     data.age = undefined;
     data.location = undefined;
     data.education = undefined;
     data.occupation = undefined;
-    // Keep 'about' visible for notifications
+    // Keep 'name' and 'about' visible
   }
   
   // Admin can see everything
@@ -129,6 +199,47 @@ export async function rejectUser(req, res) {
     }
     
     res.json({ message: 'User removed from feed' });
+  } catch (e) {
+    res.status(400).json({ message: e.message });
+  }
+}
+
+export async function blockUser(req, res) {
+  try {
+    const { userId } = req.body;
+    const user = req.user;
+    
+    if (!user.blockedUsers) user.blockedUsers = [];
+    if (!user.blockedUsers.includes(userId)) {
+      user.blockedUsers.push(userId);
+      await user.save();
+    }
+    
+    res.json({ message: 'User blocked successfully' });
+  } catch (e) {
+    res.status(400).json({ message: e.message });
+  }
+}
+
+export async function unblockUser(req, res) {
+  try {
+    const { userId } = req.body;
+    const user = req.user;
+    
+    if (!user.blockedUsers) user.blockedUsers = [];
+    user.blockedUsers = user.blockedUsers.filter(id => String(id) !== String(userId));
+    await user.save();
+    
+    res.json({ message: 'User unblocked successfully' });
+  } catch (e) {
+    res.status(400).json({ message: e.message });
+  }
+}
+
+export async function getBlockedUsers(req, res) {
+  try {
+    const user = await req.user.populate('blockedUsers', 'name profilePhoto email');
+    res.json({ blockedUsers: user.blockedUsers || [] });
   } catch (e) {
     res.status(400).json({ message: e.message });
   }

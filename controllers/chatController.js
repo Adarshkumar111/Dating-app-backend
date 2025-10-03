@@ -2,10 +2,25 @@ import Chat from '../models/Chat.js';
 import User from '../models/User.js';
 
 // Get or create chat between two users
-export async function getChatByUserId(req, res) {
+export async function getChatBetween(req, res) {
   try {
     const otherUserId = req.params.userId;
     const currentUserId = req.user._id;
+
+    // Check if either user has blocked the other
+    const currentUser = await User.findById(currentUserId);
+    const otherUser = await User.findById(otherUserId);
+    
+    const isBlockedByMe = currentUser.blockedUsers?.includes(otherUserId);
+    const isBlockedByThem = otherUser.blockedUsers?.includes(currentUserId);
+    
+    if (isBlockedByMe || isBlockedByThem) {
+      return res.status(403).json({ 
+        message: 'Cannot access chat. User is blocked.',
+        isBlockedByMe,
+        isBlockedByThem
+      });
+    }
 
     // Find existing chat
     let chat = await Chat.findOne({
@@ -43,7 +58,9 @@ export async function getChatByUserId(req, res) {
       chatId: chat._id,
       users: chat.users,
       messages: filteredMessages,
-      isBlocked: chat.isBlocked
+      isBlocked: chat.isBlocked,
+      isBlockedByMe: currentUser.blockedUsers?.includes(otherUserId) || false,
+      isBlockedByThem: otherUser.blockedUsers?.includes(String(currentUserId)) || false
     });
   } catch (e) {
     console.error('Get chat error:', e);
@@ -120,6 +137,19 @@ export async function sendMessage(req, res) {
     
     req.io.to(req.params.chatId).emit('message', messageData);
     
+    // Emit global notification to the recipient
+    const recipient = chat.users.find(u => String(u) !== String(req.user._id));
+    if (recipient) {
+      req.io.emit(`user:${recipient}:newMessage`, {
+        senderId: req.user._id,
+        senderName: req.user.name,
+        senderPhoto: req.user.profilePhoto,
+        chatId: req.params.chatId,
+        text: message.text,
+        messageType: message.messageType
+      });
+    }
+    
     res.json({ ok: true, message: messageData });
   } catch (e) {
     console.error('Send message error:', e);
@@ -169,26 +199,6 @@ export async function deleteMessage(req, res) {
     console.error('Delete message error:', e);
     res.status(400).json({ message: e.message });
   }
-}
-
-export async function blockChat(req, res) {
-  const chat = await Chat.findById(req.params.chatId);
-  if (!chat) return res.status(404).json({ message: 'Chat not found' });
-  if (!chat.users.some(u => String(u) === String(req.user._id))) return res.status(403).json({ message: 'Not in chat' });
-  chat.isBlocked = true;
-  chat.blockedBy = req.user._id;
-  await chat.save();
-  res.json({ ok: true });
-}
-
-export async function unblockChat(req, res) {
-  const chat = await Chat.findById(req.params.chatId);
-  if (!chat) return res.status(404).json({ message: 'Chat not found' });
-  if (!chat.users.some(u => String(u) === String(req.user._id))) return res.status(403).json({ message: 'Not in chat' });
-  chat.isBlocked = false;
-  chat.blockedBy = null;
-  await chat.save();
-  res.json({ ok: true });
 }
 
 export async function addReaction(req, res) {
@@ -279,6 +289,19 @@ export async function uploadMedia(req, res) {
     
     req.io.to(req.params.chatId).emit('message', messageData);
     
+    // Emit global notification to the recipient  
+    const recipient = chat.users.find(u => String(u) !== String(req.user._id));
+    if (recipient) {
+      req.io.emit(`user:${recipient}:newMessage`, {
+        senderId: req.user._id,
+        senderName: req.user.name,
+        senderPhoto: req.user.profilePhoto,
+        chatId: req.params.chatId,
+        text: '',
+        messageType: message.messageType
+      });
+    }
+    
     res.json({ ok: true, mediaUrl, message: messageData });
   } catch (e) {
     console.error('Upload media error:', e);
@@ -318,13 +341,12 @@ export async function markMessagesAsDelivered(req, res) {
   try {
     const chat = await Chat.findById(req.params.chatId);
     if (!chat) return res.status(404).json({ message: 'Chat not found' });
-    if (!chat.users.some(u => String(u) === String(req.user._id))) return res.status(403).json({ message: 'Not in chat' });
     
-    // Mark all messages from other users as delivered
+    // Mark all messages as delivered to current user
     let updated = false;
-    chat.messages.forEach(msg => {
-      if (String(msg.sender) !== String(req.user._id) && !msg.deliveredTo.includes(req.user._id)) {
-        msg.deliveredTo.push(req.user._id);
+    chat.messages.forEach(m => {
+      if (String(m.sender) !== String(req.user._id) && !m.deliveredTo.includes(req.user._id)) {
+        m.deliveredTo.push(req.user._id);
         updated = true;
       }
     });
@@ -338,6 +360,59 @@ export async function markMessagesAsDelivered(req, res) {
     res.json({ ok: true });
   } catch (e) {
     console.error('Mark delivered error:', e);
+    res.status(400).json({ message: e.message });
+  }
+}
+
+export async function blockChat(req, res) {
+  try {
+    const chat = await Chat.findById(req.params.chatId);
+    if (!chat) return res.status(404).json({ message: 'Chat not found' });
+    
+    // Check if user is part of this chat
+    if (!chat.users.some(u => String(u) === String(req.user._id))) {
+      return res.status(403).json({ message: 'Not authorized' });
+    }
+    
+    chat.isBlocked = true;
+    chat.blockedBy = req.user._id;
+    await chat.save();
+    
+    // Emit block event to other user
+    req.io.to(req.params.chatId).emit('chatBlocked', { blockedBy: req.user._id });
+    
+    res.json({ ok: true, message: 'Chat blocked successfully' });
+  } catch (e) {
+    console.error('Block chat error:', e);
+    res.status(400).json({ message: e.message });
+  }
+}
+
+export async function unblockChat(req, res) {
+  try {
+    const chat = await Chat.findById(req.params.chatId);
+    if (!chat) return res.status(404).json({ message: 'Chat not found' });
+    
+    // Check if user is part of this chat
+    if (!chat.users.some(u => String(u) === String(req.user._id))) {
+      return res.status(403).json({ message: 'Not authorized' });
+    }
+    
+    // Only the blocker can unblock
+    if (String(chat.blockedBy) !== String(req.user._id)) {
+      return res.status(403).json({ message: 'Only the blocker can unblock' });
+    }
+    
+    chat.isBlocked = false;
+    chat.blockedBy = null;
+    await chat.save();
+    
+    // Emit unblock event to other user
+    req.io.to(req.params.chatId).emit('chatUnblocked');
+    
+    res.json({ ok: true, message: 'Chat unblocked successfully' });
+  } catch (e) {
+    console.error('Unblock chat error:', e);
     res.status(400).json({ message: e.message });
   }
 }

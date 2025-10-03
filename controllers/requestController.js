@@ -1,5 +1,6 @@
 import Request from '../models/Request.js';
 import User from '../models/User.js';
+import Settings from '../models/Settings.js';
 import Chat from '../models/Chat.js';
 
 export async function sendRequest(req, res) {
@@ -8,6 +9,38 @@ export async function sendRequest(req, res) {
     
     if (String(toUserId) === String(req.user._id)) {
       return res.status(400).json({ message: 'Cannot request self' });
+    }
+    
+    // Check request limits
+    const user = req.user;
+    const today = new Date();
+    const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    
+    // Reset daily counter if it's a new day
+    if (!user.requestsTodayAt || user.requestsTodayAt < todayStart) {
+      user.requestsToday = 0;
+      user.requestsTodayAt = today;
+      await user.save();
+    }
+    
+    // Get settings for request limits
+    const settings = await Settings.find();
+    const settingsObj = {};
+    settings.forEach(setting => {
+      settingsObj[setting.key] = setting.value;
+    });
+    
+    const freeLimit = settingsObj.freeUserRequestLimit || 2;
+    const premiumLimit = settingsObj.premiumUserRequestLimit || 20;
+    const currentLimit = user.isPremium && user.premiumExpiresAt > today ? premiumLimit : freeLimit;
+    
+    if (user.requestsToday >= currentLimit) {
+      return res.status(429).json({ 
+        message: 'Daily request limit reached',
+        limit: currentLimit,
+        isPremium: user.isPremium && user.premiumExpiresAt > today,
+        needsPremium: true
+      });
     }
     
     // Check if request already exists
