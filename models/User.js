@@ -10,7 +10,7 @@ const userSchema = new mongoose.Schema({
   gender: { type: String, enum: ['male', 'female'], required: true },
   location: String,
   contact: { type: String, required: true, unique: true },
-  email: { type: String },
+  email: { type: String, index: true },
   passwordHash: { type: String, required: true },
   education: String,
   occupation: String,
@@ -26,7 +26,10 @@ const userSchema = new mongoose.Schema({
   rejectedUsers: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }], // users rejected from feed
   isAdmin: { type: Boolean, default: false },
   resetPasswordToken: String,
-  resetPasswordExpires: Date
+  resetPasswordExpires: Date,
+  emailVerified: { type: Boolean, default: false },
+  emailOtpHash: String,
+  emailOtpExpires: Date
 }, { timestamps: true });
 
 export default mongoose.model('User', userSchema);

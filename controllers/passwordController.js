@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import User from '../models/User.js';
+import { sendEmail } from '../utils/emailUtil.js';
 
 // Generate OTP (6 digits)
 function generateOTP() {
@@ -9,9 +10,9 @@ function generateOTP() {
 
 export async function requestPasswordReset(req, res) {
   try {
-    const { email, contact } = req.body;
-    
-    const user = await User.findOne(email ? { email } : { contact });
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ message: 'Email is required' });
+    const user = await User.findOne({ email });
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
@@ -22,14 +23,15 @@ export async function requestPasswordReset(req, res) {
     user.resetPasswordExpires = Date.now() + 15 * 60 * 1000; // 15 minutes
     await user.save();
 
-    // TODO: Send OTP via email/SMS
-    // For now, return it in response (ONLY FOR DEVELOPMENT)
-    console.log(`Password reset OTP for ${user.contact}: ${otp}`);
+    // Send OTP via email
+    const emailResult = await sendEmail({
+      to: email,
+      subject: 'Password reset OTP - M Nikah',
+      html: `<p>Your OTP for resetting password is <b>${otp}</b>. It expires in 15 minutes.</p>`
+    });
     
     return res.json({ 
-      message: 'OTP sent successfully', 
-      otp: process.env.NODE_ENV === 'development' ? otp : undefined, // Remove in production
-      contact: user.contact 
+      message: emailResult.success ? 'OTP sent successfully' : 'Email service unavailable'
     });
   } catch (e) {
     console.error('Request password reset error:', e);
@@ -39,12 +41,9 @@ export async function requestPasswordReset(req, res) {
 
 export async function verifyOTPAndResetPassword(req, res) {
   try {
-    const { contact, otp, newPassword } = req.body;
+    const { email, otp, newPassword } = req.body;
 
-    const user = await User.findOne({ 
-      contact,
-      resetPasswordExpires: { $gt: Date.now() }
-    });
+    const user = await User.findOne({ email, resetPasswordExpires: { $gt: Date.now() } });
 
     if (!user) {
       return res.status(400).json({ message: 'Invalid or expired OTP' });

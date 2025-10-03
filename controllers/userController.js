@@ -1,5 +1,6 @@
 import User from '../models/User.js';
 import Request from '../models/Request.js';
+// Lazy imports inside functions to avoid circular deps/heavy startup
 
 export async function me(req, res) {
   const u = req.user.toObject();
@@ -282,6 +283,39 @@ export async function getBlockedUsers(req, res) {
     const user = await req.user.populate('blockedUsers', 'name profilePhoto email');
     res.json({ blockedUsers: user.blockedUsers || [] });
   } catch (e) {
+    res.status(400).json({ message: e.message });
+  }
+}
+
+// Permanently delete chat(s) with a specific blocked user
+export async function deleteChatsWithUser(req, res) {
+  try {
+    const { userId } = req.body;
+    const currentUser = req.user;
+
+    // Ensure the target is actually blocked by current user
+    const isBlocked = (currentUser.blockedUsers || []).some(id => String(id) === String(userId));
+    if (!isBlocked) {
+      return res.status(403).json({ message: 'User is not blocked' });
+    }
+
+    const { default: Chat } = await import('../models/Chat.js');
+    const { invalidateChatCache } = await import('../services/redisChatService.js');
+
+    // Find all chats between the two users (normally 1)
+    const chats = await Chat.find({
+      users: { $all: [currentUser._id, userId] }
+    }).select('_id');
+
+    // Invalidate caches first (best effort)
+    await Promise.all(chats.map(c => invalidateChatCache(c._id).catch(() => {})));
+
+    // Delete chats
+    await Chat.deleteMany({ users: { $all: [currentUser._id, userId] } });
+
+    return res.json({ ok: true, deleted: chats.length });
+  } catch (e) {
+    console.error('Delete chats with user error:', e);
     res.status(400).json({ message: e.message });
   }
 }

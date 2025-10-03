@@ -115,6 +115,7 @@ export async function invalidateChatCache(chatId) {
 
   try {
     await redis.del(getChatKey(chatId));
+    await redis.del(getChatMessagesKey(chatId));
   } catch (error) {
     console.error('Redis invalidateChatCache error:', error);
   }
