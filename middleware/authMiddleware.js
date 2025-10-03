@@ -18,6 +18,11 @@ export async function authRequired(req, res, next) {
 }
 
 export function approvedOnly(req, res, next) {
+  // Allow admins to bypass approval check
+  if (req.user.isAdmin) {
+    return next();
+  }
+  
   if (req.user.status !== 'approved') {
     return res.status(403).json({ message: 'Waiting for admin approval' });
   }

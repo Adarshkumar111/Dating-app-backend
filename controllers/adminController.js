@@ -94,7 +94,7 @@ export async function getUserChatHistory(req, res) {
       .populate('users', 'name profilePhoto email contact')
       .lean();
     
-    // Format chat history
+    // Format chat history with full messages
     const chatHistory = chats.map(chat => {
       // Get the other user (not the target user)
       const otherUser = chat.users.find(u => String(u._id) !== String(userId));
@@ -103,6 +103,17 @@ export async function getUserChatHistory(req, res) {
       const lastMessage = chat.messages.length > 0 
         ? chat.messages[chat.messages.length - 1]
         : null;
+      
+      // Format all messages with sender info
+      const messages = chat.messages.map(msg => ({
+        _id: msg._id,
+        text: msg.text,
+        messageType: msg.messageType,
+        sentAt: msg.sentAt,
+        sender: msg.sender,
+        senderName: String(msg.sender) === String(userId) ? 'Target User' : otherUser.name,
+        status: msg.status
+      }));
       
       return {
         chatId: chat._id,
@@ -114,13 +125,16 @@ export async function getUserChatHistory(req, res) {
           contact: otherUser.contact
         },
         messageCount: chat.messages.length,
+        messages: messages, // Include all messages
         lastMessage: lastMessage ? {
           text: lastMessage.text || `[${lastMessage.messageType}]`,
           sentAt: lastMessage.sentAt,
           sender: lastMessage.sender
         } : null,
         isBlocked: chat.isBlocked,
-        blockedBy: chat.blockedBy
+        blockedBy: chat.blockedBy,
+        createdAt: chat.createdAt,
+        updatedAt: chat.updatedAt
       };
     });
     
@@ -275,6 +289,99 @@ export async function deletePremiumPlan(req, res) {
     
     await PremiumPlan.findByIdAndUpdate(planId, { isActive: false });
     res.json({ ok: true, message: 'Plan deactivated successfully' });
+  } catch (e) {
+    res.status(400).json({ message: e.message });
+  }
+}
+
+export async function initializeDefaultData(req, res) {
+  try {
+    const defaultPlans = [
+      {
+        name: '1 Month Premium',
+        duration: 1,
+        price: 9.99,
+        discount: 0,
+        requestLimit: 50,
+        features: [
+          'Send up to 50 follow requests per day',
+          'Priority customer support',
+          'Advanced search filters',
+          'See who viewed your profile'
+        ]
+      },
+      {
+        name: '3 Month Premium',
+        duration: 3,
+        price: 24.99,
+        discount: 15,
+        requestLimit: 75,
+        features: [
+          'Send up to 75 follow requests per day',
+          'Priority customer support',
+          'Advanced search filters',
+          'See who viewed your profile',
+          'Unlimited message storage',
+          'Profile boost feature'
+        ]
+      },
+      {
+        name: '6 Month Premium',
+        duration: 6,
+        price: 44.99,
+        discount: 25,
+        requestLimit: 100,
+        features: [
+          'Send up to 100 follow requests per day',
+          'Priority customer support',
+          'Advanced search filters',
+          'See who viewed your profile',
+          'Unlimited message storage',
+          'Profile boost feature',
+          'Exclusive premium badge',
+          'Early access to new features'
+        ]
+      }
+    ];
+
+    const defaultSettings = [
+      {
+        key: 'freeUserRequestLimit',
+        value: 2,
+        description: 'Daily request limit for free users'
+      },
+      {
+        key: 'premiumUserRequestLimit',
+        value: 20,
+        description: 'Daily request limit for premium users (fallback)'
+      }
+    ];
+
+    // Initialize default settings
+    for (const setting of defaultSettings) {
+      await Settings.findOneAndUpdate(
+        { key: setting.key },
+        setting,
+        { upsert: true }
+      );
+    }
+
+    // Initialize default premium plans
+    let createdPlans = 0;
+    for (const plan of defaultPlans) {
+      const existing = await PremiumPlan.findOne({ name: plan.name });
+      if (!existing) {
+        await PremiumPlan.create(plan);
+        createdPlans++;
+      }
+    }
+
+    res.json({ 
+      ok: true, 
+      message: `Initialization complete! Created ${createdPlans} new plans and updated settings.`,
+      settingsInitialized: defaultSettings.length,
+      plansCreated: createdPlans
+    });
   } catch (e) {
     res.status(400).json({ message: e.message });
   }

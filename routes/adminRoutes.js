@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { authRequired } from '../middleware/authMiddleware.js';
 import { adminOnly } from '../middleware/adminMiddleware.js';
-import { listUsers, approveUser, deleteUser, listChats, searchUsers, getSpammers, getUserChatHistory, adminBlockUser, adminUnblockUser, getSettings, updateSettings, getPremiumPlans, createPremiumPlan, updatePremiumPlan, deletePremiumPlan } from '../controllers/adminController.js';
+import { listUsers, approveUser, deleteUser, listChats, searchUsers, getSpammers, getUserChatHistory, adminBlockUser, adminUnblockUser, getSettings, updateSettings, getPremiumPlans, createPremiumPlan, updatePremiumPlan, deletePremiumPlan, initializeDefaultData } from '../controllers/adminController.js';
 
 const router = Router();
 router.use(authRequired, adminOnly);
@@ -25,5 +25,8 @@ router.get('/premium-plans', getPremiumPlans);
 router.post('/premium-plans', createPremiumPlan);
 router.put('/premium-plans/:planId', updatePremiumPlan);
 router.delete('/premium-plans/:planId', deletePremiumPlan);
+
+// Initialize default data
+router.post('/initialize', initializeDefaultData);
 
 export default router;

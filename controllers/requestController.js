@@ -128,3 +128,25 @@ export async function unfollow(req, res) {
     res.status(400).json({ message: e.message });
   }
 }
+
+export async function cancelRequest(req, res) {
+  try {
+    const { userId } = req.body;
+    
+    // Find and delete the pending request sent by current user
+    const deleted = await Request.findOneAndDelete({
+      from: req.user._id,
+      to: userId,
+      status: 'pending'
+    });
+    
+    if (!deleted) {
+      return res.status(404).json({ message: 'Pending request not found' });
+    }
+    
+    res.json({ message: 'Request cancelled successfully' });
+  } catch (e) {
+    console.error('Cancel request error:', e);
+    res.status(400).json({ message: e.message });
+  }
+}

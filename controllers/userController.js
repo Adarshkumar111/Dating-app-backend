@@ -146,6 +146,23 @@ export async function getProfile(req, res) {
   const target = await User.findById(req.params.id).select('-passwordHash -resetPasswordToken');
   if (!target) return res.status(404).json({ message: 'Not found' });
   
+  const isOwnProfile = String(req.user._id) === String(target._id);
+  const isAdmin = req.user.isAdmin;
+  
+  // Check if either user has blocked the other
+  const currentUser = req.user;
+  const isBlockedByMe = currentUser.blockedUsers?.includes(String(target._id));
+  const isBlockedByThem = target.blockedUsers?.includes(String(req.user._id));
+  
+  // If blocked by target user, return minimal info (they can't view profile)
+  if (isBlockedByThem && !isOwnProfile && !isAdmin) {
+    return res.status(403).json({ 
+      message: 'Profile not accessible',
+      blocked: true,
+      name: target.name // Only show name
+    });
+  }
+  
   // Check if connected
   const connection = await Request.findOne({
     $or: [
@@ -155,14 +172,17 @@ export async function getProfile(req, res) {
   });
   
   const data = target.toObject();
-  const isOwnProfile = String(req.user._id) === String(target._id);
-  const isAdmin = req.user.isAdmin;
   
   // Always hide sensitive fields from other users
   if (!isOwnProfile && !isAdmin) {
     data.contact = undefined;
     data.email = undefined;
     data.itCardPhoto = undefined;
+  }
+  
+  // If I blocked them, hide their bio/about
+  if (isBlockedByMe && !isOwnProfile && !isAdmin) {
+    data.about = undefined;
   }
   
   // Privacy: hide additional data until connected (but keep name visible)
@@ -173,16 +193,20 @@ export async function getProfile(req, res) {
     data.location = undefined;
     data.education = undefined;
     data.occupation = undefined;
-    // Keep 'name' and 'about' visible
+    // Keep 'name' and 'about' visible (unless blocked)
   }
   
   // Admin can see everything
   if (isAdmin) {
     data.isConnected = !!connection;
+    data.isBlockedByMe = isBlockedByMe;
+    data.isBlockedByThem = isBlockedByThem;
     return res.json(data);
   }
   
   data.isConnected = !!connection;
+  data.isBlockedByMe = isBlockedByMe;
+  data.isBlockedByThem = isBlockedByThem;
   
   res.json(data);
 }
@@ -213,9 +237,26 @@ export async function blockUser(req, res) {
     if (!user.blockedUsers.includes(userId)) {
       user.blockedUsers.push(userId);
       await user.save();
+      
+      // Remove connection (accepted request) between users
+      // They'll need to send/accept request again after unblocking
+      await Request.deleteMany({
+        $or: [
+          { from: user._id, to: userId, status: 'accepted' },
+          { from: userId, to: user._id, status: 'accepted' }
+        ]
+      });
+      
+      // Also delete pending requests
+      await Request.deleteMany({
+        $or: [
+          { from: user._id, to: userId, status: 'pending' },
+          { from: userId, to: user._id, status: 'pending' }
+        ]
+      });
     }
     
-    res.json({ message: 'User blocked successfully' });
+    res.json({ message: 'User blocked successfully', silent: true });
   } catch (e) {
     res.status(400).json({ message: e.message });
   }

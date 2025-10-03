@@ -1,5 +1,6 @@
 import Chat from '../models/Chat.js';
 import User from '../models/User.js';
+import { getCachedChat, cacheChat, getCachedMessages, cacheNewMessage, updateMessageStatusInCache } from '../services/redisChatService.js';
 
 // Get or create chat between two users
 export async function getChatBetween(req, res) {
@@ -12,17 +13,10 @@ export async function getChatBetween(req, res) {
     const otherUser = await User.findById(otherUserId);
     
     const isBlockedByMe = currentUser.blockedUsers?.includes(otherUserId);
-    const isBlockedByThem = otherUser.blockedUsers?.includes(currentUserId);
-    
-    if (isBlockedByMe || isBlockedByThem) {
-      return res.status(403).json({ 
-        message: 'Cannot access chat. User is blocked.',
-        isBlockedByMe,
-        isBlockedByThem
-      });
-    }
+    const isBlockedByThem = otherUser.blockedUsers?.includes(String(currentUserId));
 
-    // Find existing chat
+    // Find or create chat (always from MongoDB for reliability)
+    // Allow viewing existing chat even if blocked (to see old messages)
     let chat = await Chat.findOne({
       users: { $all: [currentUserId, otherUserId] }
     }).populate('users', 'name profilePhoto');
@@ -35,6 +29,11 @@ export async function getChatBetween(req, res) {
       });
       chat = await Chat.findById(chat._id).populate('users', 'name profilePhoto');
     }
+    
+    // Cache for future (non-blocking)
+    cacheChat(chat._id, chat.toObject()).catch(err => 
+      console.error('Cache error (non-critical):', err)
+    );
 
     // Filter messages deleted by current user (but keep deletedForEveryone to show indicator)
     const filteredMessages = chat.messages
@@ -97,10 +96,26 @@ export async function getMessages(req, res) {
 
 export async function sendMessage(req, res) {
   try {
-    const chat = await Chat.findById(req.params.chatId);
+    const chat = await Chat.findById(req.params.chatId).populate('users', 'blockedUsers');
     if (!chat) return res.status(404).json({ message: 'Chat not found' });
-    if (!chat.users.some(u => String(u) === String(req.user._id))) return res.status(403).json({ message: 'Not in chat' });
+    if (!chat.users.some(u => String(u._id) === String(req.user._id))) return res.status(403).json({ message: 'Not in chat' });
     if (chat.isBlocked) return res.status(403).json({ message: 'Chat blocked' });
+    
+    // Check if either user has blocked the other
+    const otherUser = chat.users.find(u => String(u._id) !== String(req.user._id));
+    const currentUser = await User.findById(req.user._id);
+    
+    const isBlockedByMe = currentUser.blockedUsers?.includes(String(otherUser._id));
+    const isBlockedByThem = otherUser.blockedUsers?.includes(String(req.user._id));
+    
+    if (isBlockedByMe || isBlockedByThem) {
+      return res.status(403).json({ 
+        message: 'Cannot send message',
+        blocked: true,
+        isBlockedByMe,
+        isBlockedByThem
+      });
+    }
     
     const { messageText, messageType, mediaUrl, mediaDuration } = req.body;
     
@@ -118,12 +133,30 @@ export async function sendMessage(req, res) {
       reactions: []
     };
     
+    // Save to MongoDB (permanent storage)
     chat.messages.push(message);
     await chat.save();
     
+    const savedMessage = chat.messages[chat.messages.length - 1];
+    
+    // Cache in Redis for fast access (non-blocking)
+    cacheNewMessage(req.params.chatId, {
+      _id: savedMessage._id,
+      sender: req.user._id,
+      text: message.text,
+      messageType: message.messageType,
+      mediaUrl: message.mediaUrl,
+      mediaDuration: message.mediaDuration,
+      sentAt: message.sentAt,
+      deliveredTo: [],
+      seenBy: [],
+      reactions: [],
+      status: 'sent'
+    }).catch(err => console.error('Cache error (non-critical):', err));
+    
     // Emit to socket room
     const messageData = {
-      _id: chat.messages[chat.messages.length - 1]._id,
+      _id: savedMessage._id,
       sender: req.user._id,
       text: message.text,
       messageType: message.messageType,
@@ -317,15 +350,24 @@ export async function markMessagesAsSeen(req, res) {
     
     // Mark all messages from other users as seen
     let updated = false;
+    const updatedMessageIds = [];
+    
     chat.messages.forEach(msg => {
       if (String(msg.sender) !== String(req.user._id) && !msg.seenBy.includes(req.user._id)) {
         msg.seenBy.push(req.user._id);
+        updatedMessageIds.push(String(msg._id));
         updated = true;
       }
     });
     
     if (updated) {
+      // Save to MongoDB
       await chat.save();
+      
+      // Update cache in Redis (non-blocking)
+      updateMessageStatusInCache(req.params.chatId, updatedMessageIds, 'seen')
+        .catch(err => console.error('Cache error (non-critical):', err));
+      
       // Emit seen status to other users
       req.io.to(req.params.chatId).emit('messagesSeen', { userId: req.user._id });
     }
