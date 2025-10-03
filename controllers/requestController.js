@@ -4,6 +4,11 @@ import Settings from '../models/Settings.js';
 import Chat from '../models/Chat.js';
 
 export async function sendRequest(req, res) {
+  // Prevent admins from sending follow requests
+  if (req.user.isAdmin) {
+    return res.status(403).json({ message: 'Admins cannot send follow requests' });
+  }
+  
   try {
     const { toUserId, type } = req.body;
     
@@ -72,12 +77,22 @@ export async function sendRequest(req, res) {
 }
 
 export async function incoming(req, res) {
+  // Prevent admins from accessing incoming requests
+  if (req.user.isAdmin) {
+    return res.status(403).json({ message: 'Admins cannot access follow requests' });
+  }
+  
   const items = await Request.find({ to: req.user._id, status: 'pending' })
     .populate('from', 'name age location profilePhoto');
   res.json(items);
 }
 
 export async function respond(req, res) {
+  // Prevent admins from responding to requests
+  if (req.user.isAdmin) {
+    return res.status(403).json({ message: 'Admins cannot respond to follow requests' });
+  }
+  
   try {
     const { requestId, action } = req.body;
     const reqDoc = await Request.findById(requestId);
@@ -111,6 +126,11 @@ export async function respond(req, res) {
 }
 
 export async function unfollow(req, res) {
+  // Prevent admins from unfollowing
+  if (req.user.isAdmin) {
+    return res.status(403).json({ message: 'Admins cannot unfollow users' });
+  }
+  
   try {
     const { userId } = req.body;
     
@@ -130,6 +150,11 @@ export async function unfollow(req, res) {
 }
 
 export async function cancelRequest(req, res) {
+  // Prevent admins from canceling requests
+  if (req.user.isAdmin) {
+    return res.status(403).json({ message: 'Admins cannot cancel follow requests' });
+  }
+  
   try {
     const { userId } = req.body;
     

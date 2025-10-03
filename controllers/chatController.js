@@ -4,6 +4,11 @@ import { getCachedChat, cacheChat, getCachedMessages, cacheNewMessage, updateMes
 
 // Get or create chat between two users
 export async function getChatBetween(req, res) {
+  // Prevent admins from accessing chat functionality
+  if (req.user.isAdmin) {
+    return res.status(403).json({ message: 'Admins cannot access chat functionality' });
+  }
+  
   try {
     const otherUserId = req.params.userId;
     const currentUserId = req.user._id;
@@ -68,6 +73,11 @@ export async function getChatBetween(req, res) {
 }
 
 export async function getMessages(req, res) {
+  // Prevent admins from accessing messages
+  if (req.user.isAdmin) {
+    return res.status(403).json({ message: 'Admins cannot access messages' });
+  }
+  
   const chat = await Chat.findById(req.params.chatId);
   if (!chat) return res.status(404).json({ message: 'Chat not found' });
   if (!chat.users.some(u => String(u) === String(req.user._id))) return res.status(403).json({ message: 'Not in chat' });
@@ -95,6 +105,11 @@ export async function getMessages(req, res) {
 }
 
 export async function sendMessage(req, res) {
+  // Prevent admins from sending messages
+  if (req.user.isAdmin) {
+    return res.status(403).json({ message: 'Admins cannot send messages' });
+  }
+  
   try {
     const chat = await Chat.findById(req.params.chatId).populate('users', 'blockedUsers');
     if (!chat) return res.status(404).json({ message: 'Chat not found' });
@@ -269,6 +284,11 @@ export async function addReaction(req, res) {
 }
 
 export async function uploadMedia(req, res) {
+  // Prevent admins from uploading media
+  if (req.user.isAdmin) {
+    return res.status(403).json({ message: 'Admins cannot upload media' });
+  }
+  
   try {
     const chat = await Chat.findById(req.params.chatId);
     if (!chat) return res.status(404).json({ message: 'Chat not found' });
@@ -343,6 +363,11 @@ export async function uploadMedia(req, res) {
 }
 
 export async function markMessagesAsSeen(req, res) {
+  // Prevent admins from marking messages
+  if (req.user.isAdmin) {
+    return res.status(403).json({ message: 'Admins cannot access messaging features' });
+  }
+  
   try {
     const chat = await Chat.findById(req.params.chatId);
     if (!chat) return res.status(404).json({ message: 'Chat not found' });

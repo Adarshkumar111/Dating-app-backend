@@ -12,6 +12,11 @@ export async function me(req, res) {
 
 // Instagram-style feed with rejected users and accepted friends excluded
 export async function list(req, res) {
+  // Prevent admins from accessing user discovery
+  if (req.user.isAdmin) {
+    return res.status(403).json({ message: 'Admins cannot access user discovery' });
+  }
+  
   const gender = req.user.gender === 'male' ? 'female' : 'male';
   const page = parseInt(req.query.page || '1');
   const pageSize = 10;
@@ -37,7 +42,7 @@ export async function list(req, res) {
       status: 'approved',
       _id: { $nin: excludeIds }
     })
-    .select('name age location about profilePhoto')
+    .select('name age location about profilePhoto isPremium')
     .skip((page-1)*pageSize)
     .limit(pageSize),
     User.countDocuments({ 
@@ -85,6 +90,11 @@ export async function list(req, res) {
 
 // Get accepted friends list with unread message count
 export async function getFriends(req, res) {
+  // Prevent admins from accessing friends/messages
+  if (req.user.isAdmin) {
+    return res.status(403).json({ message: 'Admins cannot access messaging features' });
+  }
+  
   try {
     const Chat = (await import('../models/Chat.js')).default;
     

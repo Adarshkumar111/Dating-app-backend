@@ -2,10 +2,29 @@ import User from '../models/User.js';
 import Chat from '../models/Chat.js';
 import PremiumPlan from '../models/PremiumPlan.js';
 import Settings from '../models/Settings.js';
+import PaymentTransaction from '../models/PaymentTransaction.js';
 
 export async function listUsers(req, res) {
   const users = await User.find().select('-passwordHash');
   res.json(users);
+}
+
+// Payments & Premium stats for admin dashboard
+export async function getPaymentStats(req, res) {
+  try {
+    const [paidCount, premiumUsersAgg, payments] = await Promise.all([
+      PaymentTransaction.countDocuments({ status: 'paid' }),
+      User.countDocuments({ isPremium: true }),
+      PaymentTransaction.aggregate([
+        { $match: { status: 'paid' } },
+        { $group: { _id: null, total: { $sum: '$amount' } } }
+      ])
+    ])
+    const totalAmount = payments.length > 0 ? payments[0].total : 0
+    res.json({ paidCount, totalAmount, premiumUsers: premiumUsersAgg })
+  } catch (e) {
+    res.status(400).json({ message: e.message })
+  }
 }
 
 export async function approveUser(req, res) {
