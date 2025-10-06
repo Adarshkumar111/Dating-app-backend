@@ -3,6 +3,9 @@ import Chat from '../models/Chat.js';
 import PremiumPlan from '../models/PremiumPlan.js';
 import Settings from '../models/Settings.js';
 import PaymentTransaction from '../models/PaymentTransaction.js';
+import PermanentBlock from '../models/PermanentBlock.js';
+import AppSettings from '../models/AppSettings.js';
+import { sendEmail } from '../utils/emailUtil.js';
 
 export async function listUsers(req, res) {
   const users = await User.find().select('-passwordHash');
@@ -401,6 +404,283 @@ export async function initializeDefaultData(req, res) {
       settingsInitialized: defaultSettings.length,
       plansCreated: createdPlans
     });
+  } catch (e) {
+    res.status(400).json({ message: e.message });
+  }
+}
+
+// ==================== NEW FEATURES ====================
+
+// Permanent Block Management
+export async function createPermanentBlock(req, res) {
+  try {
+    const { itNumber, email, phoneNumber, reason } = req.body;
+    
+    const block = new PermanentBlock({
+      itNumber,
+      email,
+      phoneNumber,
+      reason,
+      blockedBy: req.user._id
+    });
+    
+    await block.save();
+    
+    // Also block the user if they exist
+    if (itNumber) await User.updateMany({ itNumber }, { status: 'blocked' });
+    if (email) await User.updateMany({ email }, { status: 'blocked' });
+    if (phoneNumber) await User.updateMany({ contact: phoneNumber }, { status: 'blocked' });
+    
+    res.json({ ok: true, message: 'Permanent block created successfully', block });
+  } catch (e) {
+    res.status(400).json({ message: e.message });
+  }
+}
+
+export async function listPermanentBlocks(req, res) {
+  try {
+    const blocks = await PermanentBlock.find().populate('blockedBy', 'name email');
+    res.json(blocks);
+  } catch (e) {
+    res.status(400).json({ message: e.message });
+  }
+}
+
+export async function removePermanentBlock(req, res) {
+  try {
+    const { blockId } = req.params;
+    await PermanentBlock.findByIdAndDelete(blockId);
+    res.json({ ok: true, message: 'Permanent block removed' });
+  } catch (e) {
+    res.status(400).json({ message: e.message });
+  }
+}
+
+export async function checkPermanentBlock(itNumber, email, phoneNumber) {
+  const block = await PermanentBlock.findOne({
+    $or: [
+      { itNumber: itNumber },
+      { email: email },
+      { phoneNumber: phoneNumber }
+    ]
+  });
+  return block;
+}
+
+// User Activity Logs
+export async function getUserActivityLogs(req, res) {
+  try {
+    const { userId } = req.params;
+    const user = await User.findById(userId).select('activityLogs lastActiveAt name email');
+    
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    
+    res.json({
+      userId: user._id,
+      name: user.name,
+      email: user.email,
+      lastActiveAt: user.lastActiveAt,
+      activityLogs: user.activityLogs || []
+    });
+  } catch (e) {
+    res.status(400).json({ message: e.message });
+  }
+}
+
+export async function getInactiveUsers(req, res) {
+  try {
+    const { days = 7 } = req.query;
+    const thresholdDate = new Date();
+    thresholdDate.setDate(thresholdDate.getDate() - parseInt(days));
+    
+    const inactiveUsers = await User.find({
+      lastActiveAt: { $lt: thresholdDate },
+      status: 'approved',
+      isAdmin: false
+    }).select('name email contact lastActiveAt');
+    
+    res.json(inactiveUsers);
+  } catch (e) {
+    res.status(400).json({ message: e.message });
+  }
+}
+
+// Profile Edit Approval
+export async function getPendingProfileEdits(req, res) {
+  try {
+    const users = await User.find({ hasPendingEdits: true })
+      .select('name email profilePhoto pendingEdits updatedAt');
+    
+    res.json(users);
+  } catch (e) {
+    res.status(400).json({ message: e.message });
+  }
+}
+
+export async function approveProfileEdit(req, res) {
+  try {
+    const { userId } = req.body;
+    const user = await User.findById(userId);
+    
+    if (!user || !user.hasPendingEdits) {
+      return res.status(404).json({ message: 'No pending edits found' });
+    }
+    
+    // Apply pending edits
+    Object.assign(user, user.pendingEdits);
+    user.pendingEdits = null;
+    user.hasPendingEdits = false;
+    await user.save();
+    
+    res.json({ ok: true, message: 'Profile edit approved' });
+  } catch (e) {
+    res.status(400).json({ message: e.message });
+  }
+}
+
+export async function rejectProfileEdit(req, res) {
+  try {
+    const { userId, reason } = req.body;
+    const user = await User.findById(userId);
+    
+    if (!user || !user.hasPendingEdits) {
+      return res.status(404).json({ message: 'No pending edits found' });
+    }
+    
+    user.pendingEdits = null;
+    user.hasPendingEdits = false;
+    await user.save();
+    
+    // Optionally send email notification with reason
+    if (user.email && reason) {
+      await sendEmail(
+        user.email,
+        'Profile Edit Rejected',
+        `Your profile edit request has been rejected. Reason: ${reason}`
+      );
+    }
+    
+    res.json({ ok: true, message: 'Profile edit rejected' });
+  } catch (e) {
+    res.status(400).json({ message: e.message });
+  }
+}
+
+// Splash Screen & Tutorial Management
+// Splash/Tutorial endpoints removed per requirements
+
+// App Settings Management
+export async function getAppSettings(req, res) {
+  try {
+    let settings = await AppSettings.findOne();
+    
+    if (!settings) {
+      // Create default settings
+      settings = new AppSettings();
+      await settings.save();
+    }
+    
+    res.json(settings);
+  } catch (e) {
+    res.status(400).json({ message: e.message });
+  }
+}
+
+export async function updateAppSettings(req, res) {
+  try {
+    const updates = req.body;
+    
+    let settings = await AppSettings.findOne();
+    
+    if (!settings) {
+      settings = new AppSettings(updates);
+    } else {
+      Object.assign(settings, updates);
+    }
+    
+    await settings.save();
+    res.json({ ok: true, message: 'Settings updated successfully', settings });
+  } catch (e) {
+    res.status(400).json({ message: e.message });
+  }
+}
+
+// Email Notifications
+export async function sendBulkEmail(req, res) {
+  try {
+    const { userIds, subject, message } = req.body;
+    
+    if (!userIds || !Array.isArray(userIds) || userIds.length === 0) {
+      return res.status(400).json({ message: 'User IDs are required' });
+    }
+    
+    const users = await User.find({ _id: { $in: userIds } }).select('email name');
+    
+    const emailPromises = users.map(user => 
+      sendEmail(user.email, subject, message.replace('{{name}}', user.name))
+    );
+    
+    await Promise.all(emailPromises);
+    
+    res.json({ ok: true, message: `Email sent to ${users.length} users` });
+  } catch (e) {
+    res.status(400).json({ message: e.message });
+  }
+}
+
+export async function notifyInactiveUsers(req, res) {
+  try {
+    const settings = await AppSettings.findOne();
+    const thresholdDays = settings?.inactivityThresholdDays || 7;
+    const emailTemplate = settings?.inactivityEmailTemplate || 'We miss you! Come back and find your perfect match.';
+    
+    const thresholdDate = new Date();
+    thresholdDate.setDate(thresholdDate.getDate() - thresholdDays);
+    
+    const inactiveUsers = await User.find({
+      lastActiveAt: { $lt: thresholdDate },
+      status: 'approved',
+      isAdmin: false,
+      email: { $exists: true, $ne: null }
+    }).select('email name');
+    
+    const emailPromises = inactiveUsers.map(user =>
+      sendEmail(
+        user.email,
+        'We Miss You!',
+        emailTemplate.replace('{{name}}', user.name)
+      )
+    );
+    
+    await Promise.all(emailPromises);
+    
+    res.json({ 
+      ok: true, 
+      message: `Notification sent to ${inactiveUsers.length} inactive users` 
+    });
+  } catch (e) {
+    res.status(400).json({ message: e.message });
+  }
+}
+
+// Set user priority/order in listings
+export async function setUserPriority(req, res) {
+  try {
+    const { userId, priority } = req.body;
+    
+    const user = await User.findByIdAndUpdate(
+      userId,
+      { displayPriority: priority },
+      { new: true }
+    );
+    
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    
+    res.json({ ok: true, message: 'User priority updated', user });
   } catch (e) {
     res.status(400).json({ message: e.message });
   }

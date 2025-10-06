@@ -11,6 +11,11 @@ export async function authRequired(req, res, next) {
     const user = await User.findById(payload.id);
     if (!user) return res.status(401).json({ message: 'Invalid token user' });
     req.user = user;
+    // Non-blocking last-active update
+    try {
+      user.lastActiveAt = new Date();
+      user.save().catch(() => {});
+    } catch (_) {}
     next();
   } catch (e) {
     return res.status(401).json({ message: 'Unauthorized' });

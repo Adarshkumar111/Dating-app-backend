@@ -7,7 +7,7 @@ const requestSchema = new mongoose.Schema({
   status: { type: String, enum: ['pending', 'accepted', 'rejected'], default: 'pending' }
 }, { timestamps: true });
 
-// Compound index to prevent duplicate requests
-requestSchema.index({ from: 1, to: 1 }, { unique: true });
+// Unique per direction and type to allow separate chat/photo requests
+requestSchema.index({ from: 1, to: 1, type: 1 }, { unique: true });
 
 export default mongoose.model('Request', requestSchema);

@@ -4,40 +4,46 @@ import { uploadToImageKit } from '../utils/imageUtil.js';
 
 export async function updateProfile(req, res) {
   try {
-    const { name, fatherName, motherName, age, location, education, occupation, about } = req.body;
     const user = req.user;
+    const pending = { ...(user.pendingEdits || {}) };
 
-    // Update fields
-    if (name) user.name = name;
-    if (fatherName) user.fatherName = fatherName;
-    if (motherName) user.motherName = motherName;
-    if (age) user.age = age;
-    if (location) user.location = location;
-    if (education) user.education = education;
-    if (occupation) user.occupation = occupation;
-    if (about) user.about = about;
+    // Text fields from requirements (collect only provided ones)
+    const editableFields = [
+      'name','fatherName','motherName','age','dateOfBirth','location','education','occupation','about','maritalStatus','disability','countryOfOrigin','languagesKnown','numberOfSiblings','lookingFor'
+    ];
+    editableFields.forEach((f) => {
+      if (typeof req.body[f] !== 'undefined') pending[f] = req.body[f];
+    });
 
-    // Upload new profile photo if provided
+    // Upload new profile photo if provided (store URL in pending)
     if (req.files?.profilePhoto?.[0]) {
       const url = await uploadToImageKit(req.files.profilePhoto[0], 'matrimonial/profiles');
-      user.profilePhoto = url;
+      pending.profilePhoto = url;
     }
 
-    // Upload gallery images (up to 8)
+    // Upload gallery images
     if (req.files?.galleryImages) {
-      const uploadPromises = req.files.galleryImages.slice(0, 8).map(file =>
+      const uploadPromises = req.files.galleryImages.map(file =>
         uploadToImageKit(file, 'matrimonial/gallery')
       );
       const urls = await Promise.all(uploadPromises);
-      user.galleryImages = [...(user.galleryImages || []), ...urls].slice(0, 8);
+      const replace = String(req.body.replaceGallery || '').toLowerCase() === 'true';
+      if (replace) {
+        // Replace entire gallery with uploaded URLs in given order
+        pending.galleryImages = urls.slice(0, 8);
+      } else {
+        // Append behavior (legacy)
+        const base = Array.isArray(user.galleryImages) ? user.galleryImages : [];
+        const pendingBase = Array.isArray(pending.galleryImages) ? pending.galleryImages : base;
+        pending.galleryImages = [...pendingBase, ...urls].slice(0, 8);
+      }
     }
 
+    user.pendingEdits = pending;
+    user.hasPendingEdits = true;
     await user.save();
-    
-    const userObj = user.toObject();
-    delete userObj.passwordHash;
-    
-    return res.json({ message: 'Profile updated successfully', user: userObj });
+
+    return res.json({ message: 'Edits submitted for admin approval' });
   } catch (e) {
     console.error('Update profile error:', e);
     return res.status(400).json({ message: e.message });

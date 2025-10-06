@@ -20,6 +20,24 @@ export async function list(req, res) {
   const gender = req.user.gender === 'male' ? 'female' : 'male';
   const page = parseInt(req.query.page || '1');
   const pageSize = 10;
+
+  // Build filter query from query params
+  const q = { gender, status: 'approved', isAdmin: false };
+  const { ageMin, ageMax, education, occupation, name } = req.query;
+  if (ageMin || ageMax) {
+    q.age = {};
+    if (ageMin) q.age.$gte = parseInt(ageMin);
+    if (ageMax) q.age.$lte = parseInt(ageMax);
+  }
+  if (education) {
+    q.education = { $regex: new RegExp(education, 'i') };
+  }
+  if (occupation) {
+    q.occupation = { $regex: new RegExp(occupation, 'i') };
+  }
+  if (name) {
+    q.name = { $regex: new RegExp(name, 'i') };
+  }
   
   // Get accepted friends to exclude from discover
   const acceptedRequests = await Request.find({
@@ -36,20 +54,13 @@ export async function list(req, res) {
   // Exclude rejected users, self, and accepted friends
   const excludeIds = [...(req.user.rejectedUsers || []), req.user._id, ...friendIds];
   
+  const baseQuery = { ...q, _id: { $nin: excludeIds } };
   const [items, total] = await Promise.all([
-    User.find({ 
-      gender, 
-      status: 'approved',
-      _id: { $nin: excludeIds }
-    })
+    User.find(baseQuery)
     .select('name age location about profilePhoto isPremium')
     .skip((page-1)*pageSize)
     .limit(pageSize),
-    User.countDocuments({ 
-      gender, 
-      status: 'approved',
-      _id: { $nin: excludeIds }
-    })
+    User.countDocuments(baseQuery)
   ]);
   
   // For each user, check request status
@@ -159,6 +170,10 @@ export async function getProfile(req, res) {
   
   const isOwnProfile = String(req.user._id) === String(target._id);
   const isAdmin = req.user.isAdmin;
+  // Hide admin profiles from regular users
+  if (target.isAdmin && !isOwnProfile && !isAdmin) {
+    return res.status(404).json({ message: 'Not found' });
+  }
   
   // Check if either user has blocked the other
   const currentUser = req.user;

@@ -1,6 +1,7 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
+import PermanentBlock from '../models/PermanentBlock.js';
 import { env } from '../config/envConfig.js';
 import { uploadToImageKit } from '../utils/imageUtil.js';
 import { sendEmail } from '../utils/emailUtil.js';
@@ -14,6 +15,17 @@ export async function signup(req, res) {
     const { name, fatherName, motherName, age, itNumber, gender, location, contact, email, password, education, occupation, about } = req.body;
     if (!email) {
       return res.status(400).json({ message: 'Email is required' });
+    }
+    // Check permanent block list
+    const isBlocked = await PermanentBlock.findOne({
+      $or: [
+        itNumber ? { itNumber } : null,
+        email ? { email } : null,
+        contact ? { phoneNumber: contact } : null
+      ].filter(Boolean)
+    });
+    if (isBlocked) {
+      return res.status(403).json({ message: 'This account is permanently blocked from registering' });
     }
     
     // Check if user already exists
@@ -80,6 +92,17 @@ export async function login(req, res) {
     const { contact, email, password } = req.body;
     const user = await User.findOne(email ? { email } : { contact });
     if (!user) return res.status(400).json({ message: 'User not found' });
+    // Check permanent block list
+    const isBlocked = await PermanentBlock.findOne({
+      $or: [
+        user.itNumber ? { itNumber: user.itNumber } : null,
+        user.email ? { email: user.email } : null,
+        user.contact ? { phoneNumber: user.contact } : null
+      ].filter(Boolean)
+    });
+    if (isBlocked || user.status === 'blocked') {
+      return res.status(403).json({ message: 'Your account is blocked. Contact support.' });
+    }
     
     // Check if user has email and it's not verified
     if (user.email && !user.emailVerified) {
@@ -93,6 +116,11 @@ export async function login(req, res) {
     const ok = await bcrypt.compare(password, user.passwordHash);
     if (!ok) return res.status(400).json({ message: 'Invalid credentials' });
     const token = jwt.sign({ id: user._id }, env.JWT_SECRET, { expiresIn: '7d' });
+    // Update last active and log activity
+    user.lastActiveAt = new Date();
+    user.activityLogs = user.activityLogs || [];
+    user.activityLogs.push({ action: 'login', timestamp: new Date() });
+    await user.save();
     return res.json({ token, status: user.status, user: { id: user._id, name: user.name, isAdmin: user.isAdmin, isPremium: user.isPremium } });
   } catch (e) {
     return res.status(400).json({ message: e.message });
