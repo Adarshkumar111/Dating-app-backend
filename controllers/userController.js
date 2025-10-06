@@ -63,6 +63,7 @@ export async function list(req, res) {
     location: true,
     education: true,
     occupation: true,
+    maritalStatus: true,
     about: true,
     profilePhoto: true,
     fatherName: false,
@@ -86,6 +87,7 @@ export async function list(req, res) {
   if (displayFlags.location) projectionFields.push('location');
   if (displayFlags.education) projectionFields.push('education');
   if (displayFlags.occupation) projectionFields.push('occupation');
+  if (displayFlags.maritalStatus) projectionFields.push('maritalStatus');
   if (displayFlags.about) projectionFields.push('about');
   if (displayFlags.profilePhoto) projectionFields.push('profilePhoto');
   if (displayFlags.fatherName) projectionFields.push('fatherName');
@@ -132,12 +134,11 @@ export async function list(req, res) {
     const isPhotoAllowed = !!(photoReq && photoReq.status === 'accepted');
     const canSeePhotos = isChatConnected && isPhotoAllowed;
     
-    // Hide details until chat connected (but keep name visible)
+    // Hide only sensitive details until chat connected (keep basic profile facts visible)
     if (!isChatConnected) {
       obj.age = undefined;
       obj.location = undefined;
-      obj.education = undefined;
-      obj.occupation = undefined;
+      // Keep education/occupation/maritalStatus visible in discover
     }
     // Hide photos until both chat connected and photo request accepted
     if (!canSeePhotos) {

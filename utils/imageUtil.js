@@ -35,15 +35,24 @@ export const upload = multer({
 export async function uploadToImageKit(file, folder = 'matrimonial') {
   if (!file) throw new Error('No file provided for upload');
 
+  // Check if ImageKit is configured
+  if (!env.IMAGEKIT_PUBLIC_KEY || !env.IMAGEKIT_PRIVATE_KEY || !env.IMAGEKIT_URL_ENDPOINT) {
+    console.warn('⚠️ ImageKit not configured. Please set IMAGEKIT_PUBLIC_KEY, IMAGEKIT_PRIVATE_KEY, and IMAGEKIT_URL_ENDPOINT in .env file');
+    console.warn('📝 Using placeholder URL. Images will not be stored.');
+    // Return a placeholder image URL for development
+    return `https://via.placeholder.com/400x400.png?text=${encodeURIComponent(file.originalname)}`;
+  }
+
   try {
     const result = await imagekit.upload({
       file: file.buffer.toString('base64'),
       fileName: `${Date.now()}-${file.originalname}`,
       folder
     });
+    console.log('✅ Image uploaded successfully:', result.url);
     return result.url;
   } catch (error) {
-    console.error('ImageKit upload error:', error);
+    console.error('❌ ImageKit upload error:', error);
     throw new Error('Image upload failed. Please try again.');
   }
 }
