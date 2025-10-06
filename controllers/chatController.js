@@ -275,6 +275,38 @@ export async function addReaction(req, res) {
       messageId, 
       reactions: message.reactions 
     });
+
+    // Create a lightweight hidden message to count as unread for the recipient (WhatsApp-like)
+    try {
+      const reactionEvent = {
+        sender: req.user._id,
+        text: '',
+        messageType: 'reaction',
+        mediaUrl: null,
+        mediaDuration: null,
+        sentAt: new Date(),
+        deliveredTo: [],
+        seenBy: [],
+        deletedFor: [],
+        deletedForEveryone: false,
+        reactions: []
+      };
+      chat.messages.push(reactionEvent);
+      await chat.save();
+      const evt = chat.messages[chat.messages.length - 1];
+      req.io.to(req.params.chatId).emit('message', {
+        _id: evt._id,
+        sender: req.user._id,
+        text: '',
+        messageType: 'reaction',
+        mediaUrl: null,
+        mediaDuration: null,
+        sentAt: evt.sentAt,
+        deliveredTo: [],
+        seenBy: [],
+        reactions: []
+      });
+    } catch (e) { /* ignore */ }
     
     res.json({ ok: true, reactions: message.reactions });
   } catch (e) {
@@ -315,6 +347,7 @@ export async function uploadMedia(req, res) {
       messageType,
       mediaUrl,
       mediaDuration: req.body.duration ? parseFloat(req.body.duration) : null,
+      clientId: req.body.clientId || undefined,
       sentAt: new Date(),
       deliveredTo: [],
       seenBy: [],
@@ -334,6 +367,7 @@ export async function uploadMedia(req, res) {
       messageType: message.messageType,
       mediaUrl: message.mediaUrl,
       mediaDuration: message.mediaDuration,
+      clientId: message.clientId,
       sentAt: message.sentAt,
       deliveredTo: [],
       seenBy: [],

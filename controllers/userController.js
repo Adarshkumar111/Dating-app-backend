@@ -285,6 +285,7 @@ export async function getProfile(req, res) {
     data.contact = undefined;
     data.email = undefined;
     data.itCardPhoto = undefined;
+    data.itNumber = undefined;
   }
   
   // If I blocked them, hide their bio/about
@@ -311,6 +312,21 @@ export async function getProfile(req, res) {
   data.isPhotoAccessible = !!photoPermission;
   data.isBlockedByMe = isBlockedByMe;
   data.isBlockedByThem = isBlockedByThem;
+
+  // Apply admin-controlled profile display flags for sensitive fields when connected
+  if (!isOwnProfile && !isAdmin && data.isConnected) {
+    let displayFlags = { email: false, contact: false, itNumber: false };
+    try {
+      const { default: AppSettings } = await import('../models/AppSettings.js');
+      const s = await AppSettings.findOne().lean();
+      if (s && s.profileDisplayFields) {
+        displayFlags = { ...displayFlags, ...s.profileDisplayFields };
+      }
+    } catch {}
+    if (displayFlags.email) data.email = target.email;
+    if (displayFlags.contact) data.contact = target.contact;
+    if (displayFlags.itNumber) data.itNumber = target.itNumber;
+  }
 
   // Also expose current photo request status/direction for the viewer
   const photoReq = await Request.findOne({

@@ -223,7 +223,7 @@ export async function getSettings(req, res) {
     // Default settings if not found
     const defaults = {
       freeUserRequestLimit: 2,
-      premiumUserRequestLimit: 20
+      notifyFollowRequestEmail: false
     };
     
     res.json({ ...defaults, ...settingsObj });
@@ -234,7 +234,7 @@ export async function getSettings(req, res) {
 
 export async function updateSettings(req, res) {
   try {
-    const { freeUserRequestLimit, premiumUserRequestLimit } = req.body;
+    const { freeUserRequestLimit, notifyFollowRequestEmail } = req.body;
     
     await Settings.findOneAndUpdate(
       { key: 'freeUserRequestLimit' },
@@ -242,11 +242,13 @@ export async function updateSettings(req, res) {
       { upsert: true }
     );
     
-    await Settings.findOneAndUpdate(
-      { key: 'premiumUserRequestLimit' },
-      { key: 'premiumUserRequestLimit', value: premiumUserRequestLimit, description: 'Daily request limit for premium users' },
-      { upsert: true }
-    );
+    if (typeof notifyFollowRequestEmail !== 'undefined') {
+      await Settings.findOneAndUpdate(
+        { key: 'notifyFollowRequestEmail' },
+        { key: 'notifyFollowRequestEmail', value: !!notifyFollowRequestEmail, description: 'Email target user when a follow request is sent' },
+        { upsert: true }
+      );
+    }
     
     res.json({ ok: true, message: 'Settings updated successfully' });
   } catch (e) {
@@ -373,9 +375,9 @@ export async function initializeDefaultData(req, res) {
         description: 'Daily request limit for free users'
       },
       {
-        key: 'premiumUserRequestLimit',
-        value: 20,
-        description: 'Daily request limit for premium users (fallback)'
+        key: 'notifyFollowRequestEmail',
+        value: false,
+        description: 'Email target user when a follow request is sent'
       }
     ];
 

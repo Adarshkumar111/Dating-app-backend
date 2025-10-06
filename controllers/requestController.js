@@ -2,6 +2,7 @@ import Request from '../models/Request.js';
 import User from '../models/User.js';
 import Settings from '../models/Settings.js';
 import Chat from '../models/Chat.js';
+import { sendEmail } from '../utils/emailUtil.js';
 
 export async function sendRequest(req, res) {
   // Prevent admins from sending follow requests
@@ -43,6 +44,7 @@ export async function sendRequest(req, res) {
       return res.status(429).json({ 
         message: 'Daily request limit reached',
         limit: currentLimit,
+        remaining: 0,
         isPremium: user.isPremium && user.premiumExpiresAt > today,
         needsPremium: true
       });
@@ -109,7 +111,28 @@ export async function sendRequest(req, res) {
       req.user.requestsToday += 1;
       await req.user.save();
     }
+
+    const updatedToday = req.user.requestsToday;
+    const remaining = Math.max(0, currentLimit - updatedToday);
     
+    // Notify target user by email if admin enabled notifications
+    try {
+      const notifyFollow = !!settingsObj.notifyFollowRequestEmail;
+      if (notifyFollow && reqType === 'follow') {
+        const toUser = await User.findById(toUserId).select('email name');
+        if (toUser?.email) {
+          const fromName = req.user?.name || 'Someone';
+          const html = `
+            <div style="font-family:Arial,sans-serif;line-height:1.6">
+              <h2>M Nikah</h2>
+              <p><strong>${fromName}</strong> sent you a follow request.</p>
+              <p>Log in to review the request and connect.</p>
+            </div>`;
+          sendEmail({ to: toUser.email, subject: 'New Follow Request', html }).catch(() => {});
+        }
+      }
+    } catch (e) { /* non-blocking */ }
+
     // Notify target user in real-time for photo requests
     try {
       if (reqType === 'photo' && req.io) {
@@ -123,7 +146,7 @@ export async function sendRequest(req, res) {
       }
     } catch {}
     
-    res.json({ message: 'Request sent', requestId: created._id, status: 'pending' });
+    res.json({ message: 'Request sent', requestId: created._id, status: 'pending', limit: currentLimit, remaining });
   } catch (e) {
     console.error('Send request error:', e);
     res.status(400).json({ message: e.message });

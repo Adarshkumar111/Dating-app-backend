@@ -1,9 +1,7 @@
 import { Router } from 'express';
 import { getChatBetween, sendMessage, deleteMessage, addReaction, uploadMedia, markMessagesAsSeen, markMessagesAsDelivered, blockChat, unblockChat } from '../controllers/chatController.js';
 import { authRequired, approvedOnly } from '../middleware/authMiddleware.js';
-import multer from 'multer';
-
-const upload = multer({ dest: 'uploads/temp' });
+import { upload } from '../utils/imageUtil.js';
 const router = Router();
 router.use(authRequired, approvedOnly);
 
