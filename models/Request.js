@@ -9,5 +9,9 @@ const requestSchema = new mongoose.Schema({
 
 // Unique per direction and type to allow separate chat/photo requests
 requestSchema.index({ from: 1, to: 1, type: 1 }, { unique: true });
+// Performance indexes for faster notification queries
+requestSchema.index({ to: 1, status: 1 });
+requestSchema.index({ from: 1, status: 1 });
+requestSchema.index({ status: 1 });
 
 export default mongoose.model('Request', requestSchema);

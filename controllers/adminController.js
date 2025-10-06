@@ -1,10 +1,11 @@
 import User from '../models/User.js';
 import Chat from '../models/Chat.js';
-import PremiumPlan from '../models/PremiumPlan.js';
-import Settings from '../models/Settings.js';
+import Request from '../models/Request.js';
 import PaymentTransaction from '../models/PaymentTransaction.js';
-import PermanentBlock from '../models/PermanentBlock.js';
+import PremiumPlan from '../models/PremiumPlan.js';
 import AppSettings from '../models/AppSettings.js';
+import Notification from '../models/Notification.js';
+import bcrypt from 'bcryptjs';
 import { sendEmail } from '../utils/emailUtil.js';
 
 export async function listUsers(req, res) {
@@ -563,6 +564,22 @@ export async function approveProfileEdit(req, res) {
     user.hasPendingEdits = false;
     await user.save();
     
+    // Create notification for user
+    await Notification.create({
+      userId: user._id,
+      type: 'profile_approved',
+      title: '✅ Profile Approved',
+      message: 'Your profile changes have been approved by admin!'
+    });
+    
+    // Emit socket event to user
+    if (req.io) {
+      req.io.emit(`user:${userId}`, { 
+        kind: 'profile:approved', 
+        message: 'Your profile changes have been approved!' 
+      });
+    }
+    
     res.json({ ok: true, message: 'Profile edit approved' });
   } catch (e) {
     res.status(400).json({ message: e.message });
@@ -581,6 +598,23 @@ export async function rejectProfileEdit(req, res) {
     user.pendingEdits = null;
     user.hasPendingEdits = false;
     await user.save();
+    
+    // Create notification for user
+    await Notification.create({
+      userId: user._id,
+      type: 'profile_rejected',
+      title: '❌ Profile Rejected',
+      message: reason ? `Your profile changes were rejected. Reason: ${reason}` : 'Your profile changes were rejected by admin.'
+    });
+    
+    // Emit socket event to user
+    if (req.io) {
+      req.io.emit(`user:${userId}`, { 
+        kind: 'profile:rejected', 
+        message: reason || 'Your profile changes were rejected.',
+        reason 
+      });
+    }
     
     // Optionally send email notification with reason
     if (user.email && reason) {

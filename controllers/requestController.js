@@ -133,10 +133,11 @@ export async function sendRequest(req, res) {
       }
     } catch (e) { /* non-blocking */ }
 
-    // Notify target user in real-time for photo requests
+    // Notify target user in real-time for ALL request types
     try {
-      if (reqType === 'photo' && req.io) {
-        req.io.emit(`user:${toUserId}`, { kind: 'photo:requested', from: String(req.user._id), to: String(toUserId) });
+      if (req.io) {
+        const eventType = reqType === 'photo' ? 'photo:requested' : 'request:received';
+        req.io.emit(`user:${toUserId}`, { kind: eventType, from: String(req.user._id), to: String(toUserId), requestType: reqType });
       }
     } catch {}
     // Notify admins of new request

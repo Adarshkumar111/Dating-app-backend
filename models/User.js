@@ -54,4 +54,14 @@ const userSchema = new mongoose.Schema({
   displayPriority: { type: Number, default: 0 }
 }, { timestamps: true });
 
+// Performance indexes for faster queries
+userSchema.index({ gender: 1, status: 1, isAdmin: 1 });
+userSchema.index({ age: 1 });
+userSchema.index({ education: 1 });
+userSchema.index({ occupation: 1 });
+userSchema.index({ name: 1 });
+userSchema.index({ status: 1, isAdmin: 1 });
+userSchema.index({ hasPendingEdits: 1 });
+userSchema.index({ isPremium: 1 });
+
 export default mongoose.model('User', userSchema);
