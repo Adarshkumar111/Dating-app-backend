@@ -55,7 +55,13 @@ const appSettingsSchema = new mongoose.Schema({
     location: { type: Boolean, default: true },
     education: { type: Boolean, default: true },
     occupation: { type: Boolean, default: true },
-    about: { type: Boolean, default: true }
+    about: { type: Boolean, default: true },
+    profilePhoto: { type: Boolean, default: true },
+    fatherName: { type: Boolean, default: false },
+    motherName: { type: Boolean, default: false },
+    contact: { type: Boolean, default: false },
+    email: { type: Boolean, default: false },
+    itNumber: { type: Boolean, default: false }
   },
   
   // Email notification settings

@@ -12,7 +12,12 @@ function genOTP() {
 
 export async function signup(req, res) {
   try {
-    const { name, fatherName, motherName, age, itNumber, gender, location, contact, email, password, education, occupation, about } = req.body;
+    const { 
+      name, fatherName, motherName, age, dateOfBirth, itNumber, gender, 
+      maritalStatus, disability, countryOfOrigin, location, 
+      contact, email, password, education, occupation, 
+      languagesKnown, numberOfSiblings, about, lookingFor 
+    } = req.body;
     if (!email) {
       return res.status(400).json({ message: 'Email is required' });
     }
@@ -51,7 +56,26 @@ export async function signup(req, res) {
 
     // Create user (email not yet verified)
     const user = await User.create({
-      name, fatherName, motherName, age, itNumber, gender, location, contact, email, passwordHash, education, occupation, about,
+      name, 
+      fatherName, 
+      motherName, 
+      age, 
+      dateOfBirth,
+      itNumber, 
+      gender, 
+      maritalStatus,
+      disability,
+      countryOfOrigin,
+      location, 
+      contact, 
+      email, 
+      passwordHash, 
+      education, 
+      occupation, 
+      languagesKnown: languagesKnown ? languagesKnown.split(',').map(l => l.trim()).filter(Boolean) : [],
+      numberOfSiblings: numberOfSiblings ? parseInt(numberOfSiblings, 10) : undefined,
+      about,
+      lookingFor,
       itCardPhoto: itCardPhotoUrl,
       profilePhoto: profilePhotoUrl,
       emailVerified: false

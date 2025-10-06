@@ -55,22 +55,71 @@ export async function list(req, res) {
   const excludeIds = [...(req.user.rejectedUsers || []), req.user._id, ...friendIds];
   
   const baseQuery = { ...q, _id: { $nin: excludeIds } };
+
+  // Load admin-controlled profile display flags (before query to build projection)
+  let displayFlags = {
+    name: true,
+    age: true,
+    location: true,
+    education: true,
+    occupation: true,
+    about: true,
+    profilePhoto: true,
+    fatherName: false,
+    motherName: false,
+    contact: false,
+    email: false,
+    itNumber: false
+  };
+  try {
+    const { default: AppSettings } = await import('../models/AppSettings.js');
+    const s = await AppSettings.findOne().lean();
+    if (s && s.profileDisplayFields) {
+      displayFlags = { ...displayFlags, ...s.profileDisplayFields };
+    }
+  } catch {}
+  
+  // Build projection based on flags (always include isPremium for badges)
+  const projectionFields = ['isPremium'];
+  if (displayFlags.name) projectionFields.push('name');
+  if (displayFlags.age) projectionFields.push('age');
+  if (displayFlags.location) projectionFields.push('location');
+  if (displayFlags.education) projectionFields.push('education');
+  if (displayFlags.occupation) projectionFields.push('occupation');
+  if (displayFlags.about) projectionFields.push('about');
+  if (displayFlags.profilePhoto) projectionFields.push('profilePhoto');
+  if (displayFlags.fatherName) projectionFields.push('fatherName');
+  if (displayFlags.motherName) projectionFields.push('motherName');
+  if (displayFlags.contact) projectionFields.push('contact');
+  if (displayFlags.email) projectionFields.push('email');
+  if (displayFlags.itNumber) projectionFields.push('itNumber');
+
   const [items, total] = await Promise.all([
     User.find(baseQuery)
-    .select('name age location about profilePhoto isPremium')
-    .skip((page-1)*pageSize)
-    .limit(pageSize),
+      .select(projectionFields.join(' '))
+      .skip((page-1)*pageSize)
+      .limit(pageSize),
     User.countDocuments(baseQuery)
   ]);
   
-  // For each user, check request status
+  // For each user, check request status (chat vs photo)
   const itemsWithStatus = await Promise.all(items.map(async (item) => {
-    const request = await Request.findOne({
-      $or: [
-        { from: req.user._id, to: item._id },
-        { from: item._id, to: req.user._id }
-      ]
-    });
+    const [chatReq, photoReq] = await Promise.all([
+      Request.findOne({
+        type: { $in: ['follow', 'chat', 'both'] },
+        $or: [
+          { from: req.user._id, to: item._id },
+          { from: item._id, to: req.user._id }
+        ]
+      }),
+      Request.findOne({
+        type: 'photo',
+        $or: [
+          { from: req.user._id, to: item._id },
+          { from: item._id, to: req.user._id }
+        ]
+      })
+    ]);
     
     const obj = item.toObject();
     
@@ -79,19 +128,40 @@ export async function list(req, res) {
     obj.email = undefined;
     obj.itCardPhoto = undefined;
     
-    // Hide details until connected (but keep name visible)
-    if (!request || request.status !== 'accepted') {
-      obj.profilePhoto = undefined;
-      obj.galleryImages = undefined;
+    const isChatConnected = !!(chatReq && chatReq.status === 'accepted');
+    const isPhotoAllowed = !!(photoReq && photoReq.status === 'accepted');
+    const canSeePhotos = isChatConnected && isPhotoAllowed;
+    
+    // Hide details until chat connected (but keep name visible)
+    if (!isChatConnected) {
       obj.age = undefined;
       obj.location = undefined;
       obj.education = undefined;
       obj.occupation = undefined;
-      // Keep 'name' and 'about' visible
+    }
+    // Hide photos until both chat connected and photo request accepted
+    if (!canSeePhotos) {
+      obj.profilePhoto = undefined;
+      obj.galleryImages = undefined;
     }
     
-    obj.requestStatus = request ? request.status : 'none';
-    obj.requestDirection = request ? (String(request.from) === String(req.user._id) ? 'sent' : 'received') : null;
+    // Apply admin display flags (final enforcement)
+    if (!displayFlags.name) obj.name = undefined;
+    if (!displayFlags.age) obj.age = undefined;
+    if (!displayFlags.location) obj.location = undefined;
+    if (!displayFlags.education) obj.education = undefined;
+    if (!displayFlags.occupation) obj.occupation = undefined;
+    if (!displayFlags.about) obj.about = undefined;
+    if (!displayFlags.profilePhoto) obj.profilePhoto = undefined;
+    if (!displayFlags.fatherName) obj.fatherName = undefined;
+    if (!displayFlags.motherName) obj.motherName = undefined;
+    if (!displayFlags.contact) obj.contact = undefined;
+    if (!displayFlags.email) obj.email = undefined;
+    
+    obj.requestStatus = chatReq ? chatReq.status : 'none';
+    obj.requestDirection = chatReq ? (String(chatReq.from) === String(req.user._id) ? 'sent' : 'received') : null;
+    obj.photoRequestStatus = photoReq ? photoReq.status : 'none';
+    obj.photoRequestDirection = photoReq ? (String(photoReq.from) === String(req.user._id) ? 'sent' : 'received') : null;
     
     return obj;
   }));
@@ -189,13 +259,23 @@ export async function getProfile(req, res) {
     });
   }
   
-  // Check if connected
-  const connection = await Request.findOne({
-    $or: [
-      { from: req.user._id, to: target._id, status: 'accepted' },
-      { from: target._id, to: req.user._id, status: 'accepted' }
-    ]
-  });
+  // Check chat connection and photo permission separately
+  const [connection, photoPermission] = await Promise.all([
+    Request.findOne({
+      type: { $in: ['follow', 'chat', 'both'] },
+      $or: [
+        { from: req.user._id, to: target._id, status: 'accepted' },
+        { from: target._id, to: req.user._id, status: 'accepted' }
+      ]
+    }),
+    Request.findOne({
+      type: 'photo',
+      $or: [
+        { from: req.user._id, to: target._id, status: 'accepted' },
+        { from: target._id, to: req.user._id, status: 'accepted' }
+      ]
+    })
+  ]);
   
   const data = target.toObject();
   
@@ -211,30 +291,38 @@ export async function getProfile(req, res) {
     data.about = undefined;
   }
   
-  // Privacy: hide additional data until connected (but keep name visible)
-  if (!connection && !isOwnProfile && !isAdmin) {
-    data.profilePhoto = undefined;
-    data.galleryImages = undefined;
-    data.age = undefined;
-    data.location = undefined;
-    data.education = undefined;
-    data.occupation = undefined;
-    // Keep 'name' and 'about' visible (unless blocked)
+  // Privacy: hide details until chat connected; hide photos until chat connected AND photo permission
+  if (!isOwnProfile && !isAdmin) {
+    if (!connection) {
+      data.age = undefined;
+      data.location = undefined;
+      data.education = undefined;
+      data.occupation = undefined;
+    }
+    if (!(connection && photoPermission)) {
+      data.profilePhoto = undefined;
+      data.galleryImages = undefined;
+    }
   }
   
-  // Admin can see everything
-  if (isAdmin) {
-    data.isConnected = !!connection;
-    data.isBlockedByMe = isBlockedByMe;
-    data.isBlockedByThem = isBlockedByThem;
-    return res.json(data);
-  }
-  
+  // Common flags
   data.isConnected = !!connection;
+  data.isPhotoAccessible = !!photoPermission;
   data.isBlockedByMe = isBlockedByMe;
   data.isBlockedByThem = isBlockedByThem;
-  
-  res.json(data);
+
+  // Also expose current photo request status/direction for the viewer
+  const photoReq = await Request.findOne({
+    type: 'photo',
+    $or: [
+      { from: req.user._id, to: target._id },
+      { from: target._id, to: req.user._id }
+    ]
+  });
+  data.photoRequestStatus = photoReq ? photoReq.status : 'none';
+  data.photoRequestDirection = photoReq ? (String(photoReq.from) === String(req.user._id) ? 'sent' : 'received') : null;
+
+  return res.json(data);
 }
 
 export async function rejectUser(req, res) {

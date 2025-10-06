@@ -9,7 +9,7 @@ const userSchema = new mongoose.Schema({
   itNumber: String,
   itCardPhoto: String, // file path or URL
   gender: { type: String, enum: ['male', 'female'], required: true },
-  maritalStatus: { type: String, enum: ['single', 'divorced', 'widowed'], default: 'single' }, // NEW
+  maritalStatus: { type: String, enum: ['single', 'never_married', 'divorced', 'widowed'], default: 'single' }, // NEW
   disability: String, // NEW: Any disability
   countryOfOrigin: String, // NEW: Country of Origin
   location: String, // Current location/city

@@ -3,8 +3,18 @@ import Request from '../models/Request.js';
 export async function getNotifications(req, res) {
   try {
     const userId = req.user._id;
-    
-    // Get all pending requests sent to this user
+
+    // Admins see all pending requests across the system
+    if (req.user.isAdmin) {
+      const requests = await Request.find({ status: 'pending' })
+        .populate('from', 'name profilePhoto')
+        .populate('to', 'name profilePhoto')
+        .sort({ createdAt: -1 })
+        .limit(100);
+      return res.json(requests);
+    }
+
+    // Regular users: pending requests addressed to me
     const requests = await Request.find({ 
       to: userId, 
       status: 'pending' 

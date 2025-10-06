@@ -511,9 +511,36 @@ export async function getInactiveUsers(req, res) {
 export async function getPendingProfileEdits(req, res) {
   try {
     const users = await User.find({ hasPendingEdits: true })
-      .select('name email profilePhoto pendingEdits updatedAt');
-    
-    res.json(users);
+      .select('name email profilePhoto pendingEdits updatedAt galleryImages fatherName motherName age dateOfBirth location education occupation about maritalStatus disability countryOfOrigin languagesKnown numberOfSiblings lookingFor');
+
+    // Build diffs per user so admin sees only what changed
+    const withDiffs = users.map(u => {
+      const pending = u.pendingEdits || {};
+      const changedFields = [];
+      Object.keys(pending).forEach(key => {
+        const oldVal = u[key]; // Current value from user doc (the "old" value)
+        const newVal = pending[key]; // Pending value (the "new" value)
+        // Compare stringified for simple equality
+        const same = JSON.stringify(oldVal) === JSON.stringify(newVal);
+        if (!same) {
+          let valueType = typeof newVal;
+          if (Array.isArray(newVal)) valueType = 'array';
+          if (key.toLowerCase().includes('photo') || key.toLowerCase().includes('image')) valueType = 'image';
+          if (key === 'galleryImages') valueType = 'gallery';
+          changedFields.push({ field: key, old: oldVal ?? null, new: newVal, valueType });
+        }
+      });
+      return {
+        _id: u._id,
+        name: u.name,
+        email: u.email,
+        profilePhoto: u.profilePhoto,
+        updatedAt: u.updatedAt,
+        changedFields
+      };
+    });
+
+    res.json(withDiffs);
   } catch (e) {
     res.status(400).json({ message: e.message });
   }

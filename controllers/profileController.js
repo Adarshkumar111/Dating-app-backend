@@ -4,8 +4,8 @@ import { uploadToImageKit } from '../utils/imageUtil.js';
 
 export async function updateProfile(req, res) {
   try {
-    const user = req.user;
-    const pending = { ...(user.pendingEdits || {}) };
+    const userId = req.user._id;
+    const pending = { ...(req.user.pendingEdits || {}) };
 
     // Text fields from requirements (collect only provided ones)
     const editableFields = [
@@ -33,15 +33,40 @@ export async function updateProfile(req, res) {
         pending.galleryImages = urls.slice(0, 8);
       } else {
         // Append behavior (legacy)
-        const base = Array.isArray(user.galleryImages) ? user.galleryImages : [];
+        const base = Array.isArray(req.user.galleryImages) ? req.user.galleryImages : [];
         const pendingBase = Array.isArray(pending.galleryImages) ? pending.galleryImages : base;
         pending.galleryImages = [...pendingBase, ...urls].slice(0, 8);
       }
     }
 
-    user.pendingEdits = pending;
-    user.hasPendingEdits = true;
-    await user.save();
+    // Build activity log entry
+    const activityLog = { action: 'profile_edit_submitted', timestamp: new Date(), metadata: { changedKeys: Object.keys(pending) } };
+
+    // Single atomic update to avoid parallel save conflicts
+    const updatedUser = await User.findByIdAndUpdate(
+      userId,
+      {
+        $set: {
+          pendingEdits: pending,
+          hasPendingEdits: true
+        },
+        $push: {
+          activityLogs: activityLog
+        }
+      },
+      { new: true }
+    );
+
+    // Notify admins in real-time (best-effort)
+    try {
+      if (req.io) {
+        req.io.emit('admin:pendingEdit', {
+          userId: updatedUser._id,
+          name: updatedUser.name,
+          changedKeys: Object.keys(pending)
+        });
+      }
+    } catch {}
 
     return res.json({ message: 'Edits submitted for admin approval' });
   } catch (e) {

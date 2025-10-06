@@ -4,6 +4,10 @@ export function requestLimitMiddleware(getLimit) {
   return async (req, res, next) => {
     try {
       const user = req.user;
+      // Do not apply limit to photo requests
+      if (req.body?.type === 'photo') {
+        return next();
+      }
       const todayKey = getTodayKey();
       const lastKey = user.requestsTodayAt ? getTodayKey(user.requestsTodayAt) : null;
       if (todayKey !== lastKey) {

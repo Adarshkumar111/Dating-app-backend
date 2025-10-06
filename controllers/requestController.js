@@ -48,26 +48,80 @@ export async function sendRequest(req, res) {
       });
     }
     
-    // Check if request already exists
+    // Check if a request of the same type already exists in either direction
+    const reqType = type || 'follow';
     const existing = await Request.findOne({
+      type: reqType,
       $or: [
         { from: req.user._id, to: toUserId },
         { from: toUserId, to: req.user._id }
       ]
     });
+    // Check for existing in same direction
+    const existingSameDir = await Request.findOne({ from: req.user._id, to: toUserId });
+    // And opposite direction
+    const existingOppDir = await Request.findOne({ from: toUserId, to: req.user._id });
     
     if (existing) {
       return res.json({ message: 'Request already exists', status: existing.status });
     }
+    // If a different type request exists in the SAME direction, upgrade to 'both'
+    if (existingSameDir && existingSameDir.type !== reqType) {
+      existingSameDir.type = 'both';
+      await existingSameDir.save();
+      return res.json({ message: 'Request updated', status: existingSameDir.status });
+    }
     
-    const created = await Request.create({ 
-      from: req.user._id, 
-      to: toUserId, 
-      type: type || 'follow' 
-    });
+    let created;
+    try {
+      created = await Request.create({ 
+        from: req.user._id, 
+        to: toUserId, 
+        type: reqType 
+      });
+    } catch (err) {
+      // Gracefully handle duplicate key error from legacy index {from,to}
+      if (err && err.code === 11000) {
+        const same = await Request.findOne({ from: req.user._id, to: toUserId });
+        if (same) {
+          if (same.type !== reqType) {
+            same.type = 'both';
+            await same.save();
+          }
+          return res.json({ message: 'Request already exists', status: same.status });
+        }
+        const opp = await Request.findOne({ from: toUserId, to: req.user._id });
+        if (opp) {
+          // Opposite direction exists; cannot create due to legacy unique index
+          // Upgrade opposite to 'both' as last resort so a single doc represents both intents
+          if (opp.type !== 'both') {
+            opp.type = 'both';
+            await opp.save();
+          }
+          return res.json({ message: 'Request already exists', status: opp.status });
+        }
+      }
+      throw err;
+    }
     
-    req.user.requestsToday += 1;
-    await req.user.save();
+    // Increment daily counter only for non-photo requests
+    if (reqType !== 'photo') {
+      req.user.requestsToday += 1;
+      await req.user.save();
+    }
+    
+    // Notify target user in real-time for photo requests
+    try {
+      if (reqType === 'photo' && req.io) {
+        req.io.emit(`user:${toUserId}`, { kind: 'photo:requested', from: String(req.user._id), to: String(toUserId) });
+      }
+    } catch {}
+    // Notify admins of new request
+    try {
+      if (req.io) {
+        req.io.emit('admin:request', { action: 'created', type: reqType, requestId: String(created._id) });
+      }
+    } catch {}
     
     res.json({ message: 'Request sent', requestId: created._id, status: 'pending' });
   } catch (e) {
@@ -104,8 +158,8 @@ export async function respond(req, res) {
     reqDoc.status = action === 'accept' ? 'accepted' : 'rejected';
     await reqDoc.save();
     
-    // If accepted, create a chat room
-    if (reqDoc.status === 'accepted') {
+    // If accepted and not a photo request, create a chat room
+    if (reqDoc.status === 'accepted' && reqDoc.type !== 'photo') {
       const existingChat = await Chat.findOne({
         users: { $all: [reqDoc.from, reqDoc.to] }
       });
@@ -117,6 +171,21 @@ export async function respond(req, res) {
         });
       }
     }
+    
+    // Real-time notify both users for photo request decisions
+    try {
+      if (reqDoc.type === 'photo' && req.io) {
+        const payload = { kind: reqDoc.status === 'accepted' ? 'photo:approved' : 'photo:rejected', from: String(reqDoc.from), to: String(reqDoc.to) };
+        req.io.emit(`user:${reqDoc.from}`, payload);
+        req.io.emit(`user:${reqDoc.to}`, payload);
+      }
+    } catch {}
+    // Notify admins of request status change
+    try {
+      if (req.io) {
+        req.io.emit('admin:request', { action: reqDoc.status, type: reqDoc.type, requestId: String(reqDoc._id) });
+      }
+    } catch {}
     
     res.json({ message: 'Updated', status: reqDoc.status });
   } catch (e) {
