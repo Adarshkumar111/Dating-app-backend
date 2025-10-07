@@ -18,15 +18,26 @@ export async function sendRequest(req, res) {
     }
     
     // Check request limits
-    const user = req.user;
+    const user = await User.findById(req.user._id); // Fetch fresh user data
     const today = new Date();
-    const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
     
-    // Reset daily counter if it's a new day
-    if (!user.requestsTodayAt || user.requestsTodayAt < todayStart) {
+    // Get start of today in UTC (to match database dates)
+    const todayStart = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+    
+    console.log('Date Check:', {
+      userId: user._id,
+      email: user.email,
+      requestsTodayAt: user.requestsTodayAt,
+      todayStart,
+      shouldReset: !user.requestsTodayAt || new Date(user.requestsTodayAt) < todayStart
+    });
+    
+    // Reset daily counter if it's a new day (comparing UTC dates)
+    if (!user.requestsTodayAt || new Date(user.requestsTodayAt) < todayStart) {
       user.requestsToday = 0;
       user.requestsTodayAt = today;
       await user.save();
+      console.log('Counter reset for user:', user._id, 'from', user.requestsToday, 'to 0');
     }
     
     // Get settings for request limits
@@ -36,9 +47,21 @@ export async function sendRequest(req, res) {
       settingsObj[setting.key] = setting.value;
     });
     
-    const freeLimit = settingsObj.freeUserRequestLimit || 2;
-    const premiumLimit = settingsObj.premiumUserRequestLimit || 20;
+    const freeLimit = Number(settingsObj.freeUserRequestLimit) || 2;
+    const premiumLimit = Number(settingsObj.premiumUserRequestLimit) || 20;
     const currentLimit = user.isPremium && user.premiumExpiresAt > today ? premiumLimit : freeLimit;
+    
+    console.log('Request Limit Check:', { 
+      userId: user._id,
+      email: user.email,
+      freeLimit, 
+      premiumLimit, 
+      currentLimit, 
+      requestsToday: user.requestsToday,
+      isPremium: user.isPremium,
+      requestsTodayAt: user.requestsTodayAt,
+      todayStart: todayStart
+    });
     
     if (user.requestsToday >= currentLimit) {
       return res.status(429).json({ 
@@ -173,17 +196,51 @@ export async function respond(req, res) {
   
   try {
     const { requestId, action } = req.body;
-    const reqDoc = await Request.findById(requestId);
     
-    if (!reqDoc || String(reqDoc.to) !== String(req.user._id)) {
-      return res.status(404).json({ message: 'Request not found' });
+    console.log('Respond request:', { requestId, action, userId: req.user._id });
+    
+    const reqDoc = await Request.findById(requestId).populate('from', 'name profilePhoto');
+    
+    if (!reqDoc) {
+      console.log('Request not found:', requestId);
+      return res.status(404).json({ message: 'Request not found or already processed' });
     }
     
-    reqDoc.status = action === 'accept' ? 'accepted' : 'rejected';
+    if (String(reqDoc.to) !== String(req.user._id)) {
+      console.log('Unauthorized access:', { reqTo: reqDoc.to, userId: req.user._id });
+      return res.status(403).json({ message: 'Unauthorized to respond to this request' });
+    }
+    
+    if (reqDoc.status !== 'pending') {
+      console.log('Request already processed:', reqDoc.status);
+      return res.status(400).json({ message: `Request already ${reqDoc.status}` });
+    }
+    
+    const isAccepted = action === 'accept';
+    reqDoc.status = isAccepted ? 'accepted' : 'rejected';
     await reqDoc.save();
     
+    // Create notification for the sender (User A)
+    const Notification = (await import('../models/Notification.js')).default;
+    await Notification.create({
+      userId: reqDoc.from,
+      type: 'system',
+      title: isAccepted ? 'Request Accepted' : 'Request Rejected',
+      message: isAccepted
+        ? `${req.user.name} accepted your request`
+        : `${req.user.name} rejected your request`,
+      read: false,
+      data: { relatedUser: req.user._id, requestId: String(reqDoc._id), kind: isAccepted ? 'request_accepted' : 'request_rejected' }
+    });
+    
+    // If rejected, delete the request so User A can send again
+    if (!isAccepted) {
+      await Request.findByIdAndDelete(requestId);
+      console.log('Request deleted after rejection:', requestId);
+    }
+    
     // If accepted and not a photo request, create a chat room
-    if (reqDoc.status === 'accepted' && reqDoc.type !== 'photo') {
+    if (isAccepted && reqDoc.type !== 'photo') {
       const existingChat = await Chat.findOne({
         users: { $all: [reqDoc.from, reqDoc.to] }
       });
@@ -204,6 +261,20 @@ export async function respond(req, res) {
         req.io.emit(`user:${reqDoc.to}`, payload);
       }
     } catch {}
+    
+    // Real-time notification for request response
+    try {
+      if (req.io) {
+        req.io.emit(`user:${reqDoc.from}`, { 
+          kind: 'notification', 
+          type: isAccepted ? 'request_accepted' : 'request_rejected',
+          message: isAccepted 
+            ? `${req.user.name} accepted your request` 
+            : `${req.user.name} rejected your request`
+        });
+      }
+    } catch {}
+    
     // Notify admins of request status change
     try {
       if (req.io) {
@@ -211,7 +282,11 @@ export async function respond(req, res) {
       }
     } catch {}
     
-    res.json({ message: 'Updated', status: reqDoc.status });
+    res.json({ 
+      message: isAccepted ? 'Request accepted' : 'Request rejected', 
+      status: reqDoc.status,
+      deleted: !isAccepted 
+    });
   } catch (e) {
     console.error('Respond to request error:', e);
     res.status(400).json({ message: e.message });

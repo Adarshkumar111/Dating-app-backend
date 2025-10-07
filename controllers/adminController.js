@@ -4,6 +4,7 @@ import Request from '../models/Request.js';
 import PaymentTransaction from '../models/PaymentTransaction.js';
 import PremiumPlan from '../models/PremiumPlan.js';
 import AppSettings from '../models/AppSettings.js';
+import Settings from '../models/Settings.js';
 import Notification from '../models/Notification.js';
 import bcrypt from 'bcryptjs';
 import { sendEmail } from '../utils/emailUtil.js';
