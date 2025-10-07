@@ -1,5 +1,6 @@
 import Request from '../models/Request.js';
 import Notification from '../models/Notification.js';
+import HelpRequest from '../models/HelpRequest.js';
 
 export async function getNotifications(req, res) {
   try {
@@ -7,12 +8,26 @@ export async function getNotifications(req, res) {
 
     // Admins see all pending requests across the system
     if (req.user.isAdmin) {
-      const requests = await Request.find({ status: 'pending' })
-        .populate('from', 'name profilePhoto')
-        .populate('to', 'name profilePhoto')
-        .sort({ createdAt: -1 })
-        .limit(100);
-      return res.json(requests);
+      const [requests, help] = await Promise.all([
+        Request.find({ status: 'pending' })
+          .populate('from', 'name profilePhoto')
+          .populate('to', 'name profilePhoto')
+          .sort({ createdAt: -1 })
+          .limit(100),
+        HelpRequest.find({ status: 'pending' })
+          .populate('from', 'name profilePhoto')
+          .sort({ createdAt: -1 })
+          .limit(100)
+      ]);
+      const normalizedHelp = help.map(h => ({
+        _id: h._id,
+        type: 'help',
+        from: h.from,
+        to: null,
+        createdAt: h.createdAt
+      }));
+      const merged = [...normalizedHelp, ...requests].sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt));
+      return res.json(merged);
     }
 
     // Regular users: pending requests + system notifications

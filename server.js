@@ -19,6 +19,7 @@ import profileRoutes from './routes/profileRoutes.js';
 import passwordRoutes from './routes/passwordRoutes.js';
 import notificationRoutes from './routes/notificationRoutes.js';
 import publicRoutes from './routes/publicRoutes.js';
+import helpRoutes from './routes/helpRoutes.js';
 
 const app = express();
 const server = http.createServer(app);
@@ -47,6 +48,7 @@ app.use('/api/profile', profileRoutes);
 app.use('/api/password', passwordRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/public', publicRoutes);
+app.use('/api/help', helpRoutes);
 
 app.get('/', (req, res) => res.send('M Nikah API running'));
 

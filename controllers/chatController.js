@@ -1,24 +1,33 @@
 import Chat from '../models/Chat.js';
 import User from '../models/User.js';
+import HelpRequest from '../models/HelpRequest.js';
 import { getCachedChat, cacheChat, getCachedMessages, cacheNewMessage, updateMessageStatusInCache } from '../services/redisChatService.js';
 
 // Get or create chat between two users
 export async function getChatBetween(req, res) {
-  // Prevent admins from accessing chat functionality
-  if (req.user.isAdmin) {
-    return res.status(403).json({ message: 'Admins cannot access chat functionality' });
-  }
-  
   try {
     const otherUserId = req.params.userId;
     const currentUserId = req.user._id;
+
+    // If admin, ensure there is an approved help request linking admin<->user and not resolved
+    let adminApproved = false;
+    if (req.user.isAdmin) {
+      const hr = await HelpRequest.findOne({ from: otherUserId, adminId: currentUserId, status: 'approved' });
+      if (!hr) return res.status(403).json({ message: 'Admin not authorized for this chat' });
+      adminApproved = true;
+    }
 
     // Check if either user has blocked the other
     const currentUser = await User.findById(currentUserId);
     const otherUser = await User.findById(otherUserId);
     
-    const isBlockedByMe = currentUser.blockedUsers?.includes(otherUserId);
-    const isBlockedByThem = otherUser.blockedUsers?.includes(String(currentUserId));
+    let isBlockedByMe = currentUser.blockedUsers?.includes(otherUserId);
+    let isBlockedByThem = otherUser.blockedUsers?.includes(String(currentUserId));
+    // For admin approved sessions, ignore personal block lists so support can function
+    if (adminApproved) {
+      isBlockedByMe = false;
+      isBlockedByThem = false;
+    }
 
     // Find or create chat (always from MongoDB for reliability)
     // Allow viewing existing chat even if blocked (to see old messages)
@@ -63,8 +72,8 @@ export async function getChatBetween(req, res) {
       users: chat.users,
       messages: filteredMessages,
       isBlocked: chat.isBlocked,
-      isBlockedByMe: currentUser.blockedUsers?.includes(otherUserId) || false,
-      isBlockedByThem: otherUser.blockedUsers?.includes(String(currentUserId)) || false
+      isBlockedByMe,
+      isBlockedByThem
     });
   } catch (e) {
     console.error('Get chat error:', e);
@@ -105,24 +114,36 @@ export async function getMessages(req, res) {
 }
 
 export async function sendMessage(req, res) {
-  // Prevent admins from sending messages
-  if (req.user.isAdmin) {
-    return res.status(403).json({ message: 'Admins cannot send messages' });
-  }
-  
   try {
     const chat = await Chat.findById(req.params.chatId).populate('users', 'blockedUsers');
     if (!chat) return res.status(404).json({ message: 'Chat not found' });
     if (!chat.users.some(u => String(u._id) === String(req.user._id))) return res.status(403).json({ message: 'Not in chat' });
-    if (chat.isBlocked) return res.status(403).json({ message: 'Chat blocked' });
+
+    // If admin, ensure help request is still approved (not resolved)
+    let adminApproved = false;
+    if (req.user.isAdmin) {
+      const otherUser = chat.users.find(u => String(u._id) !== String(req.user._id));
+      const hr = await HelpRequest.findOne({ from: otherUser?._id, adminId: req.user._id, status: 'approved' });
+      if (!hr) return res.status(403).json({ message: 'Admin not authorized to send message' });
+      adminApproved = true;
+    }
+
+    // If not an approved admin session and chat is blocked, deny
+    if (chat.isBlocked && !adminApproved) return res.status(403).json({ message: 'Chat blocked' });
     
     // Check if either user has blocked the other
     const otherUser = chat.users.find(u => String(u._id) !== String(req.user._id));
     const currentUser = await User.findById(req.user._id);
     
-    const isBlockedByMe = currentUser.blockedUsers?.includes(String(otherUser._id));
-    const isBlockedByThem = otherUser.blockedUsers?.includes(String(req.user._id));
-    
+    let isBlockedByMe = currentUser.blockedUsers?.includes(String(otherUser._id));
+    let isBlockedByThem = otherUser.blockedUsers?.includes(String(req.user._id));
+
+    // Allow admin approved sessions to bypass personal blocklists for support
+    if (adminApproved) {
+      isBlockedByMe = false;
+      isBlockedByThem = false;
+    }
+
     if (isBlockedByMe || isBlockedByThem) {
       return res.status(403).json({ 
         message: 'Cannot send message',

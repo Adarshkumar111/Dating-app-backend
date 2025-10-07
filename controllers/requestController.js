@@ -326,18 +326,45 @@ export async function cancelRequest(req, res) {
   try {
     const { userId } = req.body;
     
-    // Find and delete the pending request sent by current user
-    const deleted = await Request.findOneAndDelete({
+    // 1) Try to cancel a pending request SENT by current user
+    let deleted = await Request.findOneAndDelete({
       from: req.user._id,
       to: userId,
       status: 'pending'
     });
-    
-    if (!deleted) {
-      return res.status(404).json({ message: 'Pending request not found' });
+
+    if (deleted) {
+      return res.json({ message: 'Request cancelled successfully' });
     }
-    
-    res.json({ message: 'Request cancelled successfully' });
+
+    // 2) If not found, try to cancel a pending request RECEIVED from that user (treat as reject)
+    const incoming = await Request.findOneAndDelete({
+      from: userId,
+      to: req.user._id,
+      status: 'pending'
+    });
+
+    if (incoming) {
+      // Notify the original sender that their request was rejected
+      try {
+        const Notification = (await import('../models/Notification.js')).default;
+        await Notification.create({
+          userId: incoming.from,
+          type: 'system',
+          title: 'Request Rejected',
+          message: `${req.user.name} rejected your request`,
+          read: false,
+          data: { relatedUser: req.user._id, requestId: String(incoming._id), kind: 'request_rejected' }
+        });
+      } catch (e) {
+        console.warn('Failed to create rejection notification on cancel:', e.message);
+      }
+
+      return res.json({ message: 'Incoming request rejected' });
+    }
+
+    // Nothing to cancel
+    return res.status(404).json({ message: 'Pending request not found' });
   } catch (e) {
     console.error('Cancel request error:', e);
     res.status(400).json({ message: e.message });

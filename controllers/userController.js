@@ -134,12 +134,9 @@ export async function list(req, res) {
     const isPhotoAllowed = !!(photoReq && photoReq.status === 'accepted');
     const canSeePhotos = isChatConnected && isPhotoAllowed;
     
-    // Hide only sensitive details until chat connected (keep basic profile facts visible)
-    if (!isChatConnected) {
-      obj.age = undefined;
-      obj.location = undefined;
-      // Keep education/occupation/maritalStatus visible in discover
-    }
+    // Respect admin display flags for basic fields even if not connected.
+    // Do NOT force-hide age/location here; final enforcement below uses displayFlags.
+    // Keep education/occupation/maritalStatus visible in discover as before.
     // Hide photos until both chat connected and photo request accepted
     if (!canSeePhotos) {
       obj.profilePhoto = undefined;
