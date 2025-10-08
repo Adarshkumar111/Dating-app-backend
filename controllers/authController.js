@@ -21,11 +21,12 @@ export async function signup(req, res) {
     if (!email) {
       return res.status(400).json({ message: 'Email is required' });
     }
+    const normEmail = String(email).trim().toLowerCase();
     // Check permanent block list
     const isBlocked = await PermanentBlock.findOne({
       $or: [
         itNumber ? { itNumber } : null,
-        email ? { email } : null,
+        normEmail ? { email: normEmail } : null,
         contact ? { phoneNumber: contact } : null
       ].filter(Boolean)
     });
@@ -36,7 +37,7 @@ export async function signup(req, res) {
     // Check if user already exists (only include provided fields)
     const dupCriteria = [
       contact ? { contact } : null,
-      email ? { email } : null
+      normEmail ? { email: normEmail } : null
     ].filter(Boolean);
     const existingUser = dupCriteria.length > 0
       ? await User.findOne({ $or: dupCriteria })
@@ -74,7 +75,7 @@ export async function signup(req, res) {
       countryOfOrigin,
       location, 
       contact, 
-      email, 
+      email: normEmail, 
       passwordHash, 
       education, 
       occupation, 
@@ -170,7 +171,8 @@ export async function requestLoginOtp(req, res) {
   try {
     const { email } = req.body;
     if (!email) return res.status(400).json({ message: 'Email is required' });
-    const user = await User.findOne({ email });
+    const normEmail = String(email).trim().toLowerCase();
+    const user = await User.findOne({ email: normEmail });
     if (!user) return res.status(404).json({ message: 'User not found' });
     const otp = genOTP();
     user.emailOtpHash = await bcrypt.hash(otp, 10);
@@ -190,7 +192,8 @@ export async function requestLoginOtp(req, res) {
 export async function verifyLoginOtp(req, res) {
   try {
     const { email, otp } = req.body;
-    const user = await User.findOne({ email, emailOtpExpires: { $gt: Date.now() } });
+    const normEmail = String(email).trim().toLowerCase();
+    const user = await User.findOne({ email: normEmail, emailOtpExpires: { $gt: Date.now() } });
     if (!user) return res.status(400).json({ message: 'Invalid or expired OTP' });
     const ok = await bcrypt.compare(otp, user.emailOtpHash || '');
     if (!ok) return res.status(400).json({ message: 'Invalid OTP' });
@@ -212,7 +215,8 @@ export async function verifyLoginOtp(req, res) {
 export async function verifyEmailOtp(req, res) {
   try {
     const { email, otp } = req.body;
-    const user = await User.findOne({ email, emailOtpExpires: { $gt: Date.now() } });
+    const normEmail = String(email).trim().toLowerCase();
+    const user = await User.findOne({ email: normEmail, emailOtpExpires: { $gt: Date.now() } });
     if (!user) return res.status(400).json({ message: 'Invalid or expired OTP' });
     const ok = await bcrypt.compare(otp, user.emailOtpHash || '');
     if (!ok) return res.status(400).json({ message: 'Invalid OTP' });
@@ -232,8 +236,9 @@ export async function resendEmailOtp(req, res) {
   try {
     const { email } = req.body;
     if (!email) return res.status(400).json({ message: 'Email is required' });
+    const normEmail = String(email).trim().toLowerCase();
     
-    const user = await User.findOne({ email });
+    const user = await User.findOne({ email: normEmail });
     if (!user) return res.status(404).json({ message: 'User not found' });
     
     if (user.emailVerified) {
