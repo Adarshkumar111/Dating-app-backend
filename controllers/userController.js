@@ -99,6 +99,7 @@ export async function list(req, res) {
   const [items, total] = await Promise.all([
     User.find(baseQuery)
       .select(projectionFields.join(' '))
+      .sort({ displayPriority: -1, createdAt: -1 }) // Sort by priority first, then newest
       .skip((page-1)*pageSize)
       .limit(pageSize),
     User.countDocuments(baseQuery)

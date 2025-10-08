@@ -749,3 +749,61 @@ export async function setUserPriority(req, res) {
     res.status(400).json({ message: e.message });
   }
 }
+
+// Send Admin Notifications
+export async function sendAdminNotification(req, res) {
+  try {
+    const { message, sendToAll, userIds } = req.body;
+    
+    if (!message || !message.trim()) {
+      return res.status(400).json({ message: 'Message is required' });
+    }
+    
+    let targetUserIds = [];
+    
+    if (sendToAll) {
+      // Get all non-admin users
+      const users = await User.find({ isAdmin: false }).select('_id');
+      targetUserIds = users.map(u => u._id);
+    } else {
+      if (!userIds || !Array.isArray(userIds) || userIds.length === 0) {
+        return res.status(400).json({ message: 'User IDs are required when not sending to all' });
+      }
+      targetUserIds = userIds;
+    }
+    
+    // Create notifications for all target users
+    const notifications = targetUserIds.map(userId => ({
+      userId,
+      type: 'admin_message',
+      title: '📢 Message from Admin',
+      message: message.trim(),
+      read: false
+    }));
+    
+    await Notification.insertMany(notifications);
+    
+    // Emit socket events to notify users in real-time
+    if (req.io) {
+      targetUserIds.forEach(userId => {
+        req.io.emit(`user:${userId}`, {
+          kind: 'notification:new',
+          notification: {
+            type: 'admin_message',
+            title: '📢 Message from Admin',
+            message: message.trim()
+          }
+        });
+      });
+    }
+    
+    res.json({ 
+      ok: true, 
+      message: `Notification sent to ${targetUserIds.length} user(s)`,
+      count: targetUserIds.length
+    });
+  } catch (e) {
+    console.error('Send admin notification error:', e);
+    res.status(400).json({ message: e.message });
+  }
+}

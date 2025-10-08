@@ -11,7 +11,7 @@ import {
   getUserActivityLogs, getInactiveUsers,
   getPendingProfileEdits, approveProfileEdit, rejectProfileEdit,
   getAppSettings, updateAppSettings,
-  sendBulkEmail, notifyInactiveUsers, setUserPriority
+  sendBulkEmail, notifyInactiveUsers, setUserPriority, sendAdminNotification
 } from '../controllers/adminController.js';
 
 const router = Router();
@@ -68,5 +68,8 @@ router.post('/notify-inactive', notifyInactiveUsers);
 
 // User Priority
 router.post('/user-priority', setUserPriority);
+
+// Admin Notifications
+router.post('/send-notification', sendAdminNotification);
 
 export default router;

@@ -4,7 +4,7 @@ const notificationSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   type: { 
     type: String, 
-    enum: ['profile_approved', 'profile_rejected', 'system'], 
+    enum: ['profile_approved', 'profile_rejected', 'system', 'admin_message'], 
     required: true 
   },
   title: { type: String, required: true },
