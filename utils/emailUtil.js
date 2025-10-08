@@ -1,53 +1,67 @@
 import nodemailer from 'nodemailer';
 import { env } from '../config/envConfig.js';
 
-let transporter;
+// Simple transporter like your working code
+const transporter = nodemailer.createTransport({
+  host: env.SMTP_HOST || 'smtp-relay.brevo.com',
+  port: Number(env.SMTP_PORT || 587),
+  secure: Number(env.SMTP_PORT || 587) === 465,
+  auth: {
+    user: env.SMTP_USER,
+    pass: env.SMTP_PASS
+  }
+});
 
-export function getMailer() {
-  if (transporter) return transporter;
-  
-  // Check if SMTP config is available
-  if (!env.SMTP_HOST || !env.SMTP_USER || !env.SMTP_PASS) {
-    console.warn('SMTP configuration missing. Email sending will be disabled.');
-    return null;
-  }
-  
-  try {
-    transporter = nodemailer.createTransport({
-      host: env.SMTP_HOST,
-      port: env.SMTP_PORT,
-      secure: false,
-      auth: {
-        user: env.SMTP_USER,
-        pass: env.SMTP_PASS
-      }
-    });
-    return transporter;
-  } catch (error) {
-    console.error('Failed to create email transporter:', error);
-    return null;
-  }
+// Verify on startup
+if (env.SMTP_USER && env.SMTP_PASS) {
+  transporter.verify()
+    .then(() => console.log('✅ SMTP transporter ready'))
+    .catch((err) => console.warn('⚠️ SMTP verification failed:', err?.message || err));
 }
 
-export async function sendEmail({ to, subject, html }) {
+// Simple sendEmail like your working code
+// kind: 'system' (signup/forgot) or 'user' (request/accept) - only user emails can be toggled off
+export async function sendEmail(arg1, arg2 = {}, arg3) {
   try {
-    const mailer = getMailer();
-    if (!mailer) {
-      console.warn('Email transporter not available. Skipping email send.');
+    // Backward compatibility: allow sendEmail(to, subject, html)
+    let to, subject, html, opts;
+    if (typeof arg1 === 'string') {
+      to = arg1;
+      subject = arg2 || '';
+      html = arg3 || '';
+      opts = {};
+    } else {
+      ({ to, subject, html } = arg1 || {});
+      opts = arg2 || {};
+    }
+    
+    const kind = opts.kind || 'system';
+    
+    // Admin can disable only user-to-user mails
+    if (kind === 'user' && !env.USER_EMAILS_ENABLED) {
+      console.warn('User-to-user email suppressed by USER_EMAILS_ENABLED=false');
+      return { success: false, error: 'User emails disabled' };
+    }
+    
+    if (!env.SMTP_USER || !env.SMTP_PASS) {
+      console.warn('SMTP not configured. Skipping email send.');
       return { success: false, error: 'Email service not configured' };
     }
     
-    const result = await mailer.sendMail({
-      from: env.SMTP_FROM || env.SMTP_USER,
+    // Simple sendMail like your working code
+    const mailOptions = {
+      from: env.SENDER_EMAIL || env.SMTP_FROM || env.SMTP_USER,
       to,
       subject,
-      html
-    });
+      html: html || '',
+      text: html ? html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim() : ''
+    };
     
-    console.log('Email sent successfully:', result.messageId);
-    return { success: true, messageId: result.messageId };
+    const info = await transporter.sendMail(mailOptions);
+    console.log('✅ Email sent to:', to, 'messageId:', info?.messageId || 'n/a');
+    return { success: true, messageId: info?.messageId };
   } catch (error) {
-    console.error('Failed to send email:', error);
+    console.error('❌ Email send failed:', error.message);
     return { success: false, error: error.message };
   }
 }

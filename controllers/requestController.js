@@ -151,7 +151,7 @@ export async function sendRequest(req, res) {
               <p><strong>${fromName}</strong> sent you a follow request.</p>
               <p>Log in to review the request and connect.</p>
             </div>`;
-          sendEmail({ to: toUser.email, subject: 'New Follow Request', html }).catch(() => {});
+          sendEmail({ to: toUser.email, subject: 'New Follow Request', html }, { kind: 'user' }).catch(() => {});
         }
       }
     } catch (e) { /* non-blocking */ }
@@ -163,6 +163,28 @@ export async function sendRequest(req, res) {
         req.io.emit(`user:${toUserId}`, { kind: eventType, from: String(req.user._id), to: String(toUserId), requestType: reqType });
       }
     } catch {}
+
+    // Optional email to original sender on acceptance if admin enabled notifications
+    try {
+      if (isAccepted && reqDoc.type !== 'photo') {
+        const settings = await Settings.find();
+        const settingsObj = {};
+        settings.forEach(s => { settingsObj[s.key] = s.value; });
+        const notifyFollow = !!settingsObj.notifyFollowRequestEmail;
+        if (notifyFollow) {
+          const fromUser = await User.findById(reqDoc.from).select('email name');
+          if (fromUser?.email) {
+            const html = `
+              <div style="font-family:Arial,sans-serif;line-height:1.6">
+                <h2>M Nikah</h2>
+                <p>Your follow request was <strong>accepted</strong> by ${req.user.name}.</p>
+                <p>You can now start a chat and get to know each other.</p>
+              </div>`;
+            sendEmail({ to: fromUser.email, subject: 'Your request was accepted', html }, { kind: 'user' }).catch(() => {});
+          }
+        }
+      }
+    } catch (e) { /* non-blocking */ }
     // Notify admins of new request
     try {
       if (req.io) {
@@ -261,7 +283,7 @@ export async function respond(req, res) {
         req.io.emit(`user:${reqDoc.to}`, payload);
       }
     } catch {}
-    
+
     // Real-time notification for request response
     try {
       if (req.io) {
