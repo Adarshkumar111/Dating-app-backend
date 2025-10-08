@@ -33,8 +33,14 @@ export async function signup(req, res) {
       return res.status(403).json({ message: 'This account is permanently blocked from registering' });
     }
     
-    // Check if user already exists
-    const existingUser = await User.findOne({ $or: [{ contact }, { email: email || null }] });
+    // Check if user already exists (only include provided fields)
+    const dupCriteria = [
+      contact ? { contact } : null,
+      email ? { email } : null
+    ].filter(Boolean);
+    const existingUser = dupCriteria.length > 0
+      ? await User.findOne({ $or: dupCriteria })
+      : null;
     if (existingUser) {
       return res.status(400).json({ message: 'User with this contact or email already exists' });
     }
