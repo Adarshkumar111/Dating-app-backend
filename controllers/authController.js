@@ -93,21 +93,29 @@ export async function signup(req, res) {
     user.emailOtpExpires = Date.now() + 15 * 60 * 1000;
     await user.save();
 
-    // Send OTP via email
-    const emailResult = await sendEmail({
-      to: user.email,
-      subject: 'Verify your email - M Nikah',
-      html: `<p>Your OTP is <b>${otp}</b>. It expires in 15 minutes.</p>`
-    });
+    // Send OTP via email with timeout to avoid long client waits in production
+    const withTimeout = (promise, ms) => Promise.race([
+      promise,
+      new Promise((resolve) => setTimeout(() => resolve({ success: false, error: 'timeout' }), ms))
+    ]);
 
-    if (!emailResult.success) {
-      console.warn('Email sending failed:', emailResult.error);
+    const emailResult = await withTimeout(
+      sendEmail({
+        to: user.email,
+        subject: 'Verify your email - M Nikah',
+        html: `<p>Your OTP is <b>${otp}</b>. It expires in 15 minutes.</p>`
+      }),
+      6000
+    );
+
+    if (!emailResult?.success) {
+      console.warn('Email sending failed or timed out:', emailResult?.error || 'timeout');
     }
 
     return res.json({ 
-      message: emailResult.success 
+      message: emailResult?.success 
         ? 'Signup successful. OTP sent to email for verification' 
-        : 'Signup successful. Email service unavailable - contact admin for verification',
+        : 'Signup successful. Email may be delayed. If not received, use Resend OTP.',
       userId: user._id, 
       status: user.status 
     });
