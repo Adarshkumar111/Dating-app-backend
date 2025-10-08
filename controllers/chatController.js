@@ -217,6 +217,19 @@ export async function sendMessage(req, res) {
         text: message.text,
         messageType: message.messageType
       });
+      
+      // If user sent message to admin, notify all admins to refresh help request stats
+      if (!req.user.isAdmin) {
+        try {
+          req.io.emit('adminRequest', { 
+            kind: 'help:newMessage', 
+            chatId: req.params.chatId,
+            senderId: String(req.user._id)
+          });
+        } catch (err) {
+          console.error('Socket emit error:', err);
+        }
+      }
     }
     
     res.json({ ok: true, message: messageData });
@@ -418,11 +431,6 @@ export async function uploadMedia(req, res) {
 }
 
 export async function markMessagesAsSeen(req, res) {
-  // Prevent admins from marking messages
-  if (req.user.isAdmin) {
-    return res.status(403).json({ message: 'Admins cannot access messaging features' });
-  }
-  
   try {
     const chat = await Chat.findById(req.params.chatId);
     if (!chat) return res.status(404).json({ message: 'Chat not found' });
@@ -450,6 +458,19 @@ export async function markMessagesAsSeen(req, res) {
       
       // Emit seen status to other users
       req.io.to(req.params.chatId).emit('messagesSeen', { userId: req.user._id });
+      
+      // If admin marked messages as seen, notify all admins to refresh help request stats
+      if (req.user.isAdmin) {
+        try {
+          req.io.emit('adminRequest', { 
+            kind: 'help:messagesSeen', 
+            chatId: req.params.chatId,
+            adminId: String(req.user._id)
+          });
+        } catch (err) {
+          console.error('Socket emit error:', err);
+        }
+      }
     }
     
     res.json({ ok: true });

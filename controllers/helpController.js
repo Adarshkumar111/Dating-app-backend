@@ -119,7 +119,42 @@ export async function listHelpRequests(req, res) {
       .sort({ createdAt: -1 })
       .limit(200)
       .lean();
-    return res.json(items);
+    
+    // For each help request, count unread messages from user to admin
+    const itemsWithUnread = await Promise.all(items.map(async (item) => {
+      let unreadCount = 0;
+      let totalMessages = 0;
+      
+      if (item.adminId && item.from) {
+        // Find chat between admin and user
+        const chat = await Chat.findOne({
+          users: { $all: [item.adminId._id, item.from._id] }
+        }).lean();
+        
+        if (chat && chat.messages) {
+          totalMessages = chat.messages.length;
+          // Count messages from user that admin hasn't seen
+          unreadCount = chat.messages.filter(msg => 
+            String(msg.sender) === String(item.from._id) && 
+            !msg.seenBy.some(id => String(id) === String(item.adminId._id))
+          ).length;
+        }
+      }
+      
+      // Format count as "9+" if more than 9
+      const unreadDisplay = unreadCount > 9 ? '9+' : unreadCount;
+      const totalDisplay = totalMessages > 9 ? '9+' : totalMessages;
+      
+      return {
+        ...item,
+        unreadCount,
+        unreadDisplay,
+        totalMessages,
+        totalDisplay
+      };
+    }));
+    
+    return res.json(itemsWithUnread);
   } catch (e) {
     console.error('listHelpRequests error', e);
     return res.status(500).json({ message: 'Failed to fetch help requests' });
@@ -153,5 +188,51 @@ export async function deleteHelpRequest(req, res) {
   } catch (e) {
     console.error('deleteHelpRequest error', e);
     return res.status(500).json({ message: 'Failed to delete help request' });
+  }
+}
+
+export async function getHelpRequestStats(req, res) {
+  try {
+    if (!req.user.isAdmin) return res.status(403).json({ message: 'Forbidden' });
+    
+    // Count pending help requests
+    const pendingCount = await HelpRequest.countDocuments({ status: 'pending' });
+    
+    // Count approved help requests with unread messages
+    const approvedRequests = await HelpRequest.find({ status: 'approved' })
+      .populate('from', '_id')
+      .populate('adminId', '_id')
+      .lean();
+    
+    let totalUnreadMessages = 0;
+    
+    for (const request of approvedRequests) {
+      if (request.adminId && request.from) {
+        const chat = await Chat.findOne({
+          users: { $all: [request.adminId._id, request.from._id] }
+        }).lean();
+        
+        if (chat && chat.messages) {
+          const unreadCount = chat.messages.filter(msg => 
+            String(msg.sender) === String(request.from._id) && 
+            !msg.seenBy.some(id => String(id) === String(request.adminId._id))
+          ).length;
+          totalUnreadMessages += unreadCount;
+        }
+      }
+    }
+    
+    const totalCount = pendingCount + totalUnreadMessages;
+    const totalDisplay = totalCount > 9 ? '9+' : totalCount;
+    
+    return res.json({
+      pendingCount,
+      totalUnreadMessages,
+      totalCount,
+      totalDisplay
+    });
+  } catch (e) {
+    console.error('getHelpRequestStats error', e);
+    return res.status(500).json({ message: 'Failed to fetch help request stats' });
   }
 }
