@@ -251,15 +251,25 @@ export async function resendEmailOtp(req, res) {
     user.emailOtpExpires = Date.now() + 15 * 60 * 1000;
     await user.save();
     
-    // Send OTP via email
-    const emailResult = await sendEmail({
-      to: email,
-      subject: 'Verify your email - M Nikah',
-      html: `<p>Your new OTP is <b>${otp}</b>. It expires in 15 minutes.</p>`
-    });
+    // Send OTP via email with timeout
+    const withTimeout = (promise, ms) => Promise.race([
+      promise,
+      new Promise((resolve) => setTimeout(() => resolve({ success: false, error: 'timeout' }), ms))
+    ]);
+    const emailResult = await withTimeout(
+      sendEmail({
+        to: email,
+        subject: 'Verify your email - M Nikah',
+        html: `<p>Your new OTP is <b>${otp}</b>. It expires in 15 minutes.</p>`
+      }),
+      6000
+    );
+    if (!emailResult?.success) {
+      console.warn('Resend email failed or timed out:', emailResult?.error || 'timeout');
+    }
     
     return res.json({ 
-      message: emailResult.success ? 'New OTP sent to email' : 'Email service unavailable'
+      message: emailResult?.success ? 'New OTP sent to email' : 'Email may be delayed. Try again shortly.'
     });
   } catch (e) {
     console.error('resendEmailOtp error:', e);
