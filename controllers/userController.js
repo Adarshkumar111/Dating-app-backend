@@ -80,8 +80,8 @@ export async function list(req, res) {
     }
   } catch {}
   
-  // Build projection based on flags (always include isPremium for badges)
-  const projectionFields = ['isPremium'];
+  // Build projection based on flags (always include isPremium for badges and displayPriority for sorting)
+  const projectionFields = ['isPremium', 'displayPriority'];
   if (displayFlags.name) projectionFields.push('name');
   if (displayFlags.age) projectionFields.push('age');
   if (displayFlags.location) projectionFields.push('location');
