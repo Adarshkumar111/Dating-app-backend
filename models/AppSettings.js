@@ -61,13 +61,31 @@ const appSettingsSchema = new mongoose.Schema({
     motherName: { type: Boolean, default: false },
     contact: { type: Boolean, default: false },
     email: { type: Boolean, default: false },
-    itNumber: { type: Boolean, default: false }
+  },
+  
+  // Auth controls
+  auth: {
+    loginIdentifier: { type: String, enum: ['email','contact','itNumber'], default: 'email' }
   },
   
   // Email notification settings
   inactivityThresholdDays: { type: Number, default: 7 },
   inactivityEmailTemplate: { type: String, default: '' }
-  
+  ,
+  // Pre-auth banner shown before login/signup
+  preAuthBanner: {
+    enabled: { type: Boolean, default: false },
+    imageUrl: { type: String, default: '' },
+    updatedAt: { type: Date }
+  }
+  ,
+  // Post-auth onboarding slides (after login/signup)
+  onboardingSlides: {
+    enabled: { type: Boolean, default: false },
+    images: { type: [String], default: [] }, // up to 6 URLs
+    updatedAt: { type: Date }
+  }
+
 }, { timestamps: true });
 
 export default mongoose.model('AppSettings', appSettingsSchema);

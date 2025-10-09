@@ -9,7 +9,10 @@ export async function updateProfile(req, res) {
 
     // Text fields from requirements (collect only provided ones)
     const editableFields = [
-      'name','fatherName','motherName','age','dateOfBirth','location','education','occupation','about','maritalStatus','disability','countryOfOrigin','languagesKnown','numberOfSiblings','lookingFor'
+      'name','fatherName','motherName','age','dateOfBirth','gender',
+      'location','state','district','city','area',
+      'education','occupation','about','maritalStatus','disability','countryOfOrigin',
+      'languagesKnown','numberOfSiblings','lookingFor'
     ];
     editableFields.forEach((f) => {
       if (typeof req.body[f] !== 'undefined') pending[f] = req.body[f];
@@ -37,6 +40,15 @@ export async function updateProfile(req, res) {
         const pendingBase = Array.isArray(pending.galleryImages) ? pending.galleryImages : base;
         pending.galleryImages = [...pendingBase, ...urls].slice(0, 8);
       }
+    }
+
+    // Apply visibility change immediately if provided
+    let visibilityChanged = false;
+    if (typeof req.body.isPublic !== 'undefined') {
+      const isPublic = String(req.body.isPublic).toLowerCase() === 'true' || req.body.isPublic === true;
+      // Update directly on user document
+      await User.updateOne({ _id: userId }, { $set: { isPublic } });
+      visibilityChanged = true;
     }
 
     // Build activity log entry
@@ -68,7 +80,10 @@ export async function updateProfile(req, res) {
       }
     } catch {}
 
-    return res.json({ message: 'Edits submitted for admin approval' });
+    const msg = visibilityChanged
+      ? 'Visibility updated. Other changes submitted for admin approval'
+      : 'Edits submitted for admin approval';
+    return res.json({ message: msg });
   } catch (e) {
     console.error('Update profile error:', e);
     return res.status(400).json({ message: e.message });

@@ -41,6 +41,7 @@ export async function list(req, res) {
   
   // Get accepted friends to exclude from discover
   const acceptedRequests = await Request.find({
+    type: { $in: ['follow', 'chat', 'both'] },
     $or: [
       { from: req.user._id, status: 'accepted' },
       { to: req.user._id, status: 'accepted' }
@@ -80,8 +81,8 @@ export async function list(req, res) {
     }
   } catch {}
   
-  // Build projection based on flags (always include isPremium for badges and displayPriority for sorting)
-  const projectionFields = ['isPremium', 'displayPriority'];
+  // Build projection based on flags (always include isPremium for badges, displayPriority for sorting, and isPublic for visibility)
+  const projectionFields = ['isPremium', 'displayPriority', 'isPublic'];
   if (displayFlags.name) projectionFields.push('name');
   if (displayFlags.age) projectionFields.push('age');
   if (displayFlags.location) projectionFields.push('location');
@@ -105,7 +106,7 @@ export async function list(req, res) {
     User.countDocuments(baseQuery)
   ]);
   
-  // For each user, check request status (chat vs photo)
+  // For each user, check request status (chat vs photo) and respect public profiles
   const itemsWithStatus = await Promise.all(items.map(async (item) => {
     const [chatReq, photoReq] = await Promise.all([
       Request.findOne({
@@ -133,7 +134,8 @@ export async function list(req, res) {
     
     const isChatConnected = !!(chatReq && chatReq.status === 'accepted');
     const isPhotoAllowed = !!(photoReq && photoReq.status === 'accepted');
-    const canSeePhotos = isChatConnected && isPhotoAllowed;
+    const isPublic = !!item.isPublic;
+    const canSeePhotos = isPublic || (isChatConnected && isPhotoAllowed);
     
     // Respect admin display flags for basic fields even if not connected.
     // Do NOT force-hide age/location here; final enforcement below uses displayFlags.
@@ -180,6 +182,7 @@ export async function getFriends(req, res) {
     
     // Find all accepted requests
     const acceptedRequests = await Request.find({
+      type: { $in: ['follow', 'chat', 'both'] },
       $or: [
         { from: req.user._id, status: 'accepted' },
         { to: req.user._id, status: 'accepted' }
@@ -239,6 +242,7 @@ export async function getProfile(req, res) {
   
   const isOwnProfile = String(req.user._id) === String(target._id);
   const isAdmin = req.user.isAdmin;
+  const targetIsPublic = !!target.isPublic;
   // Hide admin profiles from regular users
   if (target.isAdmin && !isOwnProfile && !isAdmin) {
     return res.status(404).json({ message: 'Not found' });
@@ -291,15 +295,16 @@ export async function getProfile(req, res) {
     data.about = undefined;
   }
   
-  // Privacy: hide details until chat connected; hide photos until chat connected AND photo permission
+  // Privacy: if profile is public, allow viewing details/photos without connection.
+  // Otherwise (private), hide details until chat connected; hide photos until chat connected AND photo permission
   if (!isOwnProfile && !isAdmin) {
-    if (!connection) {
+    if (!targetIsPublic && !connection) {
       data.age = undefined;
       data.location = undefined;
       data.education = undefined;
       data.occupation = undefined;
     }
-    if (!(connection && photoPermission)) {
+    if (!targetIsPublic && !(connection && photoPermission)) {
       data.profilePhoto = undefined;
       data.galleryImages = undefined;
     }
@@ -307,7 +312,8 @@ export async function getProfile(req, res) {
   
   // Common flags
   data.isConnected = !!connection;
-  data.isPhotoAccessible = !!photoPermission;
+  // Public profiles expose photos; otherwise require photo permission
+  data.isPhotoAccessible = targetIsPublic || !!photoPermission;
   data.isBlockedByMe = isBlockedByMe;
   data.isBlockedByThem = isBlockedByThem;
 

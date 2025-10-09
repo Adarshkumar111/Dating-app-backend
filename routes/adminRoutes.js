@@ -11,8 +11,10 @@ import {
   getUserActivityLogs, getInactiveUsers,
   getPendingProfileEdits, approveProfileEdit, rejectProfileEdit,
   getAppSettings, updateAppSettings,
-  sendBulkEmail, notifyInactiveUsers, setUserPriority, sendAdminNotification
+  sendBulkEmail, notifyInactiveUsers, setUserPriority, sendAdminNotification,
+  uploadPreAuthBanner, uploadOnboardingSlides
 } from '../controllers/adminController.js';
+import { upload } from '../utils/imageUtil.js';
 
 const router = Router();
 router.use(authRequired, adminOnly);
@@ -71,5 +73,11 @@ router.post('/user-priority', setUserPriority);
 
 // Admin Notifications
 router.post('/send-notification', sendAdminNotification);
+
+// Pre-auth banner upload
+router.post('/preauth-banner', upload.single('image'), uploadPreAuthBanner);
+
+// Onboarding slides upload (multiple images)
+router.post('/onboarding-slides', upload.array('images', 6), uploadOnboardingSlides);
 
 export default router;

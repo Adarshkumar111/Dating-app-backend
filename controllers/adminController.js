@@ -8,10 +8,34 @@ import Settings from '../models/Settings.js';
 import Notification from '../models/Notification.js';
 import bcrypt from 'bcryptjs';
 import { sendEmail } from '../utils/emailUtil.js';
+import { uploadToImageKit } from '../utils/imageUtil.js';
 
 export async function listUsers(req, res) {
   const users = await User.find().select('-passwordHash');
   res.json(users);
+}
+
+// Upload onboarding slides (admin only, up to 6 images)
+export async function uploadOnboardingSlides(req, res) {
+  try {
+    if (!req.user?.isAdmin) return res.status(403).json({ message: 'Forbidden' });
+    const files = req.files || [];
+    if (!files.length) return res.status(400).json({ message: 'No files uploaded' });
+    const urls = [];
+    for (const f of files.slice(0, 6)) {
+      const url = await uploadToImageKit(f, 'matrimonial/onboarding');
+      urls.push(url);
+    }
+    let settings = await AppSettings.findOne();
+    if (!settings) settings = new AppSettings();
+    settings.onboardingSlides = settings.onboardingSlides || {};
+    settings.onboardingSlides.images = urls;
+    settings.onboardingSlides.updatedAt = new Date();
+    await settings.save();
+    return res.json({ ok: true, images: urls });
+  } catch (e) {
+    return res.status(400).json({ message: e.message });
+  }
 }
 
 // Payments & Premium stats for admin dashboard
@@ -661,13 +685,65 @@ export async function updateAppSettings(req, res) {
     if (!settings) {
       settings = new AppSettings(updates);
     } else {
+      // Merge updates
       Object.assign(settings, updates);
+      // If preAuthBanner provided, ensure updatedAt is set
+      if (updates?.preAuthBanner && typeof updates.preAuthBanner === 'object') {
+        if (!settings.preAuthBanner) settings.preAuthBanner = {};
+        if (typeof updates.preAuthBanner.enabled !== 'undefined') {
+          settings.preAuthBanner.enabled = !!updates.preAuthBanner.enabled;
+        }
+        if (typeof updates.preAuthBanner.imageUrl !== 'undefined') {
+          settings.preAuthBanner.imageUrl = updates.preAuthBanner.imageUrl || '';
+        }
+        // Set updatedAt when either field is present
+        settings.preAuthBanner.updatedAt = new Date();
+      }
+      // If onboardingSlides provided, merge and set updatedAt
+      if (updates?.onboardingSlides && typeof updates.onboardingSlides === 'object') {
+        if (!settings.onboardingSlides) settings.onboardingSlides = {};
+        if (typeof updates.onboardingSlides.enabled !== 'undefined') {
+          settings.onboardingSlides.enabled = !!updates.onboardingSlides.enabled;
+        }
+        if (Array.isArray(updates.onboardingSlides.images)) {
+          // Keep max 6
+          settings.onboardingSlides.images = updates.onboardingSlides.images.filter(Boolean).slice(0, 6);
+        }
+        settings.onboardingSlides.updatedAt = new Date();
+      }
+      // If auth controls provided, set and mark modified
+      if (updates?.auth && typeof updates.auth === 'object') {
+        settings.auth = settings.auth || {};
+        if (typeof updates.auth.loginIdentifier !== 'undefined') {
+          settings.auth.loginIdentifier = updates.auth.loginIdentifier;
+        }
+        settings.markModified('auth');
+      }
     }
     
     await settings.save();
     res.json({ ok: true, message: 'Settings updated successfully', settings });
   } catch (e) {
     res.status(400).json({ message: e.message });
+  }
+}
+
+// Upload pre-auth banner image (admin only)
+export async function uploadPreAuthBanner(req, res) {
+  try {
+    if (!req.user?.isAdmin) return res.status(403).json({ message: 'Forbidden' });
+    const file = req.file;
+    if (!file) return res.status(400).json({ message: 'No file uploaded' });
+    const url = await uploadToImageKit(file, 'matrimonial/preauth');
+    let settings = await AppSettings.findOne();
+    if (!settings) settings = new AppSettings();
+    settings.preAuthBanner = settings.preAuthBanner || {};
+    settings.preAuthBanner.imageUrl = url;
+    settings.preAuthBanner.updatedAt = new Date();
+    await settings.save();
+    return res.json({ ok: true, imageUrl: url });
+  } catch (e) {
+    return res.status(400).json({ message: e.message });
   }
 }
 
