@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import PremiumPlan from '../models/PremiumPlan.js';
 import AppSettings from '../models/AppSettings.js';
+import User from '../models/User.js';
 
 const router = Router();
 
@@ -61,3 +62,30 @@ router.get('/onboarding-slides', async (req, res) => {
 });
 
 export default router;
+
+// New: list of distinct states (places) for filters
+router.get('/locations/states', async (req, res) => {
+  try {
+    const states = await User.distinct('state', { state: { $ne: null, $ne: '' }, isAdmin: false, status: 'approved' });
+    res.json({ states: states.sort((a,b) => String(a).localeCompare(String(b))) });
+  } catch (e) {
+    res.status(400).json({ message: e.message });
+  }
+});
+
+// Districts for a given state
+router.get('/locations/districts', async (req, res) => {
+  try {
+    const { state } = req.query;
+    if (!state) return res.json({ districts: [] });
+    const districts = await User.distinct('district', {
+      state: state,
+      district: { $ne: null, $ne: '' },
+      isAdmin: false,
+      status: 'approved'
+    });
+    res.json({ districts: districts.sort((a,b) => String(a).localeCompare(String(b))) });
+  } catch (e) {
+    res.status(400).json({ message: e.message });
+  }
+});

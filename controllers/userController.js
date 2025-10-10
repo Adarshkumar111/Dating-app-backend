@@ -23,7 +23,7 @@ export async function list(req, res) {
 
   // Build filter query from query params
   const q = { gender, status: 'approved', isAdmin: false };
-  const { ageMin, ageMax, education, occupation, name } = req.query;
+  const { ageMin, ageMax, education, occupation, state, district, name } = req.query;
   if (ageMin || ageMax) {
     q.age = {};
     if (ageMin) q.age.$gte = parseInt(ageMin);
@@ -34,6 +34,12 @@ export async function list(req, res) {
   }
   if (occupation) {
     q.occupation = { $regex: new RegExp(occupation, 'i') };
+  }
+  if (state) {
+    q.state = { $regex: new RegExp(state, 'i') };
+  }
+  if (district) {
+    q.district = { $regex: new RegExp(district, 'i') };
   }
   if (name) {
     q.name = { $regex: new RegExp(name, 'i') };
@@ -91,6 +97,8 @@ export async function list(req, res) {
   if (displayFlags.maritalStatus) projectionFields.push('maritalStatus');
   if (displayFlags.about) projectionFields.push('about');
   if (displayFlags.profilePhoto) projectionFields.push('profilePhoto');
+  // Include DOB when either DOB is enabled or age is enabled (to compute age)
+  if (displayFlags.dateOfBirth || displayFlags.age) projectionFields.push('dateOfBirth');
   if (displayFlags.fatherName) projectionFields.push('fatherName');
   if (displayFlags.motherName) projectionFields.push('motherName');
   if (displayFlags.contact) projectionFields.push('contact');
@@ -158,6 +166,21 @@ export async function list(req, res) {
     if (!displayFlags.motherName) obj.motherName = undefined;
     if (!displayFlags.contact) obj.contact = undefined;
     if (!displayFlags.email) obj.email = undefined;
+    // If age is enabled but missing, compute from DOB (server-side convenience for UI)
+    if (displayFlags.age) {
+      try {
+        if ((obj.age === undefined || obj.age === null) && obj.dateOfBirth) {
+          const d = new Date(obj.dateOfBirth);
+          if (!isNaN(d.getTime())) {
+            const today = new Date();
+            let age = today.getFullYear() - d.getFullYear();
+            const m = today.getMonth() - d.getMonth();
+            if (m < 0 || (m === 0 && today.getDate() < d.getDate())) age--;
+            if (age >= 0 && age < 130) obj.age = age;
+          }
+        }
+      } catch {}
+    }
     
     obj.requestStatus = chatReq ? chatReq.status : 'none';
     obj.requestDirection = chatReq ? (String(chatReq.from) === String(req.user._id) ? 'sent' : 'received') : null;

@@ -43,7 +43,11 @@ const appSettingsSchema = new mongoose.Schema({
     location: { type: Boolean, default: true },
     age: { type: Boolean, default: true },
     education: { type: Boolean, default: true },
-    occupation: { type: Boolean, default: true },
+    // Deprecated: occupation (kept for backward compatibility)
+    occupation: { type: Boolean, default: false },
+    // New granular location filters
+    state: { type: Boolean, default: true },
+    district: { type: Boolean, default: true },
     maritalStatus: { type: Boolean, default: true },
     nameSearch: { type: Boolean, default: true }
   },
