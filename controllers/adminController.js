@@ -15,6 +15,63 @@ export async function listUsers(req, res) {
   res.json(users);
 }
 
+// List all current premium users with plan and tier
+export async function listPremiumUsers(req, res) {
+  try {
+    const users = await User.find({ isPremium: true })
+      .select('name email contact profilePhoto premiumTier premiumPlan premiumExpiresAt createdAt')
+      .populate('premiumPlan', 'name tier duration price');
+    const items = users.map(u => ({
+      _id: u._id,
+      name: u.name,
+      email: u.email,
+      contact: u.contact,
+      profilePhoto: u.profilePhoto,
+      premiumTier: u.premiumTier || u.premiumPlan?.tier || null,
+      premiumPlan: u.premiumPlan ? { _id: u.premiumPlan._id, name: u.premiumPlan.name, tier: u.premiumPlan.tier, duration: u.premiumPlan.duration, price: u.premiumPlan.price } : null,
+      premiumExpiresAt: u.premiumExpiresAt,
+      since: u.createdAt
+    }));
+    res.json(items);
+  } catch (e) {
+    res.status(400).json({ message: e.message });
+  }
+}
+
+// Admin can cancel a user's premium subscription immediately
+export async function cancelUserPremium(req, res) {
+  try {
+    const { userId } = req.body;
+    if (!userId) return res.status(400).json({ message: 'userId is required' });
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    user.isPremium = false;
+    user.premiumExpiresAt = null;
+    user.premiumPlan = null;
+    user.premiumTier = undefined;
+    await user.save();
+
+    // Optional: create a notification to inform the user
+    try {
+      await Notification.create({
+        userId: user._id,
+        type: 'system',
+        title: 'Premium Cancelled',
+        message: 'Your premium subscription was cancelled by admin.',
+        read: false
+      });
+      if (req.io) {
+        req.io.emit(`user:${user._id}`, { kind: 'premium:cancelled' });
+      }
+    } catch {}
+
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ message: e.message });
+  }
+}
+
 // Upload onboarding slides (admin only, up to 6 images)
 export async function uploadOnboardingSlides(req, res) {
   try {
@@ -294,10 +351,11 @@ export async function getPremiumPlans(req, res) {
 
 export async function createPremiumPlan(req, res) {
   try {
-    const { name, duration, price, discount, requestLimit, features } = req.body;
+    const { name, tier, duration, price, discount, requestLimit, features } = req.body;
     
     const plan = new PremiumPlan({
       name,
+      tier,
       duration,
       price,
       discount: discount || 0,
@@ -315,11 +373,11 @@ export async function createPremiumPlan(req, res) {
 export async function updatePremiumPlan(req, res) {
   try {
     const { planId } = req.params;
-    const { name, duration, price, discount, requestLimit, features, isActive } = req.body;
+    const { name, tier, duration, price, discount, requestLimit, features, isActive } = req.body;
     
     const plan = await PremiumPlan.findByIdAndUpdate(
       planId,
-      { name, duration, price, discount, requestLimit, features, isActive },
+      { name, tier, duration, price, discount, requestLimit, features, isActive },
       { new: true }
     );
     
@@ -349,6 +407,7 @@ export async function initializeDefaultData(req, res) {
     const defaultPlans = [
       {
         name: '1 Month Premium',
+        tier: 'bronze',
         duration: 1,
         price: 9.99,
         discount: 0,
@@ -362,6 +421,7 @@ export async function initializeDefaultData(req, res) {
       },
       {
         name: '3 Month Premium',
+        tier: 'silver',
         duration: 3,
         price: 24.99,
         discount: 15,
@@ -377,6 +437,7 @@ export async function initializeDefaultData(req, res) {
       },
       {
         name: '6 Month Premium',
+        tier: 'gold',
         duration: 6,
         price: 44.99,
         discount: 25,

@@ -6,6 +6,7 @@ import {
   getUserChatHistory, adminBlockUser, adminUnblockUser, getSettings, updateSettings, 
   getPremiumPlans, createPremiumPlan, updatePremiumPlan, deletePremiumPlan, 
   initializeDefaultData, getPaymentStats,
+  listPremiumUsers, cancelUserPremium,
   // NEW IMPORTS
   createPermanentBlock, listPermanentBlocks, removePermanentBlock,
   getUserActivityLogs, getInactiveUsers,
@@ -44,6 +45,9 @@ router.post('/initialize', initializeDefaultData);
 
 // Payments stats
 router.get('/payments/stats', getPaymentStats);
+// Premium users management
+router.get('/payments/premium-users', listPremiumUsers);
+router.post('/payments/cancel-premium', cancelUserPremium);
 
 // NEW ROUTES
 // Permanent Blocks

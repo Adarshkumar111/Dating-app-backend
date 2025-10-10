@@ -1,6 +1,7 @@
 import PremiumPlan from '../models/PremiumPlan.js';
 import PaymentTransaction from '../models/PaymentTransaction.js';
 import User from '../models/User.js';
+import Notification from '../models/Notification.js';
 import { createOrder, verifySignature, getRazorpayKeyId } from '../utils/razorpayUtil.js';
 
 export async function listPlans(req, res) {
@@ -84,14 +85,67 @@ export async function verifyPayment(req, res) {
     });
 
     // Update user to premium
+    // Interpret plan.duration as days
     const now = new Date();
     const expires = new Date(now);
-    expires.setMonth(expires.getMonth() + plan.duration);
+    expires.setDate(expires.getDate() + (Number(plan.duration) || 0));
 
     await User.findByIdAndUpdate(req.user._id, {
       isPremium: true,
-      premiumExpiresAt: expires
+      premiumExpiresAt: expires,
+      premiumPlan: plan._id,
+      premiumTier: plan.tier || undefined
     });
+
+    // Create a system notification for the user (congrats)
+    try {
+      await Notification.create({
+        userId: req.user._id,
+        type: 'system',
+        title: '🎉 Premium Activated',
+        message: `Congratulations! Your ${String(plan.tier || 'premium').toUpperCase()} plan is active for ${plan.duration} day(s).`,
+        read: false,
+        data: { kind: 'premium:activated', planId: plan._id, tier: plan.tier, duration: plan.duration }
+      });
+    } catch {}
+
+    // Emit socket events: to user and to admins
+    try {
+      if (req.io) {
+        // Notify the user channel
+        req.io.emit(`user:${req.user._id}`, { kind: 'premium:activated', tier: String(plan.tier || '').toLowerCase(), duration: plan.duration });
+        // Notify admins about purchase
+        const admins = await User.find({ isAdmin: true }).select('_id');
+        admins.forEach(a => {
+          req.io.emit('adminPayment', { userId: String(req.user._id), name: req.user.name, tier: String(plan.tier || '').toLowerCase() });
+        });
+      }
+    } catch {}
+
+    // Create a system notification for the user (congrats)
+    try {
+      await Notification.create({
+        userId: req.user._id,
+        type: 'system',
+        title: '🎉 Premium Activated',
+        message: `Congratulations! Your ${String(plan.tier || 'premium').toUpperCase()} plan is active for ${plan.duration} day(s).`,
+        read: false,
+        data: { kind: 'premium:activated', planId: plan._id, tier: plan.tier, duration: plan.duration }
+      });
+    } catch {}
+
+    // Emit socket events: to user and to admins
+    try {
+      if (req.io) {
+        // Notify the user channel
+        req.io.emit(`user:${req.user._id}`, { kind: 'premium:activated', tier: String(plan.tier || '').toLowerCase(), duration: plan.duration });
+        // Notify admins about purchase
+        const admins = await User.find({ isAdmin: true }).select('_id');
+        admins.forEach(a => {
+          req.io.emit('adminPayment', { userId: String(req.user._id), name: req.user.name, tier: String(plan.tier || '').toLowerCase() });
+        });
+      }
+    } catch {}
 
     res.json({
       success: true,
@@ -129,13 +183,16 @@ export async function subscribe(req, res) {
     });
 
     // Activate premium for the user
+    // Interpret plan.duration as days
     const now = new Date();
     const expires = new Date(now);
-    expires.setMonth(expires.getMonth() + plan.duration);
+    expires.setDate(expires.getDate() + (Number(plan.duration) || 0));
 
     await User.findByIdAndUpdate(req.user._id, {
       isPremium: true,
-      premiumExpiresAt: expires
+      premiumExpiresAt: expires,
+      premiumPlan: plan._id,
+      premiumTier: plan.tier || undefined
     });
 
     res.json({

@@ -81,11 +81,35 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => console.log('🔴 User disconnected'));
 });
 
+// ✅ Listen with fallback if port is busy
+const listenWithFallback = (startPort, maxRetries = 5) => new Promise((resolve, reject) => {
+  const tryPort = (port, attempt) => {
+    const onError = (err) => {
+      if (err && err.code === 'EADDRINUSE' && attempt < maxRetries) {
+        console.warn(`⚠️  Port ${port} in use, retrying on ${port + 1}...`);
+        server.off('error', onError);
+        // small delay before retry
+        setTimeout(() => tryPort(port + 1, attempt + 1), 150);
+      } else {
+        server.off('error', onError);
+        reject(err);
+      }
+    };
+    server.once('error', onError);
+    server.listen(port, () => {
+      server.off('error', onError);
+      console.log(`✅ Server running on port ${port}`);
+      resolve();
+    });
+  };
+  tryPort(Number(startPort) || 5000, 0);
+});
+
 // ✅ Start function
 const start = async () => {
   await connectDB();
   await connectRedis();
-  server.listen(env.PORT || 5000, () => console.log(`✅ Server running on port ${env.PORT || 5000}`));
+  await listenWithFallback(env.PORT || 5000);
 };
 
 // ✅ Graceful shutdown

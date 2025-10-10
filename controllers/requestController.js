@@ -3,6 +3,7 @@ import User from '../models/User.js';
 import Settings from '../models/Settings.js';
 import Chat from '../models/Chat.js';
 import { sendEmail } from '../utils/emailUtil.js';
+import PremiumPlan from '../models/PremiumPlan.js';
 
 export async function sendRequest(req, res) {
   // Prevent admins from sending follow requests
@@ -48,8 +49,19 @@ export async function sendRequest(req, res) {
     });
     
     const freeLimit = Number(settingsObj.freeUserRequestLimit) || 2;
-    const premiumLimit = Number(settingsObj.premiumUserRequestLimit) || 20;
-    const currentLimit = user.isPremium && user.premiumExpiresAt > today ? premiumLimit : freeLimit;
+    let currentLimit = freeLimit;
+    const hasActivePremium = user.isPremium && user.premiumExpiresAt && new Date(user.premiumExpiresAt) > today;
+    if (hasActivePremium) {
+      let premiumLimit = Number(settingsObj.premiumUserRequestLimit) || undefined;
+      // If a specific premium plan is attached, prefer its requestLimit
+      if (user.premiumPlan) {
+        try {
+          const plan = await PremiumPlan.findById(user.premiumPlan).select('requestLimit');
+          if (plan?.requestLimit) premiumLimit = plan.requestLimit;
+        } catch {}
+      }
+      currentLimit = premiumLimit ?? 20;
+    }
     
     console.log('Request Limit Check:', { 
       userId: user._id,
@@ -58,7 +70,7 @@ export async function sendRequest(req, res) {
       premiumLimit, 
       currentLimit, 
       requestsToday: user.requestsToday,
-      isPremium: user.isPremium,
+      isPremium: hasActivePremium,
       requestsTodayAt: user.requestsTodayAt,
       todayStart: todayStart
     });
