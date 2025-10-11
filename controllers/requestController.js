@@ -13,6 +13,9 @@ export async function sendRequest(req, res) {
   
   try {
     const { toUserId, type } = req.body;
+    if (!toUserId) {
+      return res.status(400).json({ message: 'Missing toUserId' });
+    }
     
     if (String(toUserId) === String(req.user._id)) {
       return res.status(400).json({ message: 'Cannot request self' });
@@ -51,23 +54,30 @@ export async function sendRequest(req, res) {
     const freeLimit = Number(settingsObj.freeUserRequestLimit) || 2;
     let currentLimit = freeLimit;
     const hasActivePremium = user.isPremium && user.premiumExpiresAt && new Date(user.premiumExpiresAt) > today;
+    let premiumLimitUsed = undefined;
     if (hasActivePremium) {
       let premiumLimit = Number(settingsObj.premiumUserRequestLimit) || undefined;
       // If a specific premium plan is attached, prefer its requestLimit
       if (user.premiumPlan) {
         try {
           const plan = await PremiumPlan.findById(user.premiumPlan).select('requestLimit');
-          if (plan?.requestLimit) premiumLimit = plan.requestLimit;
-        } catch {}
+          if (typeof plan?.requestLimit === 'number' && !isNaN(plan.requestLimit) && plan.requestLimit > 0) {
+            premiumLimit = plan.requestLimit;
+          }
+        } catch (e) {
+          // ignore and fall back
+        }
       }
-      currentLimit = premiumLimit ?? 20;
+      // Final fallback for premium if nothing configured
+      currentLimit = (typeof premiumLimit === 'number' && !isNaN(premiumLimit) && premiumLimit > 0) ? premiumLimit : 20;
+      premiumLimitUsed = currentLimit;
     }
     
     console.log('Request Limit Check:', { 
       userId: user._id,
       email: user.email,
       freeLimit, 
-      premiumLimit, 
+      premiumLimit: premiumLimitUsed, 
       currentLimit, 
       requestsToday: user.requestsToday,
       isPremium: hasActivePremium,
@@ -76,12 +86,13 @@ export async function sendRequest(req, res) {
     });
     
     if (user.requestsToday >= currentLimit) {
+      const isPremiumNow = !!(user.isPremium && user.premiumExpiresAt && new Date(user.premiumExpiresAt) > today);
       return res.status(429).json({ 
         message: 'Daily request limit reached',
         limit: currentLimit,
         remaining: 0,
-        isPremium: user.isPremium && user.premiumExpiresAt > today,
-        needsPremium: true
+        isPremium: isPremiumNow,
+        needsPremium: !isPremiumNow
       });
     }
     
@@ -141,6 +152,22 @@ export async function sendRequest(req, res) {
       throw err;
     }
     
+    // If this is a chat request, ensure a pending chat exists so both users see the thread
+    try {
+      if (reqType === 'chat') {
+        const Chat = (await import('../models/Chat.js')).default;
+        const ids = [String(req.user._id), String(toUserId)].sort();
+        const pairKey = `${ids[0]}_${ids[1]}`;
+        let chat = await Chat.findOne({ pairKey });
+        if (!chat) {
+          await Chat.create({ users: [req.user._id, toUserId], pairKey, isPending: true, messages: [] });
+        } else if (!chat.isPending) {
+          chat.isPending = true;
+          await chat.save();
+        }
+      }
+    } catch (e) { /* non-blocking */ }
+
     // Increment daily counter only for non-photo requests
     if (reqType !== 'photo') {
       req.user.requestsToday += 1;
@@ -176,27 +203,6 @@ export async function sendRequest(req, res) {
       }
     } catch {}
 
-    // Optional email to original sender on acceptance if admin enabled notifications
-    try {
-      if (isAccepted && reqDoc.type !== 'photo') {
-        const settings = await Settings.find();
-        const settingsObj = {};
-        settings.forEach(s => { settingsObj[s.key] = s.value; });
-        const notifyFollow = !!settingsObj.notifyFollowRequestEmail;
-        if (notifyFollow) {
-          const fromUser = await User.findById(reqDoc.from).select('email name');
-          if (fromUser?.email) {
-            const html = `
-              <div style="font-family:Arial,sans-serif;line-height:1.6">
-                <h2>M Nikah</h2>
-                <p>Your follow request was <strong>accepted</strong> by ${req.user.name}.</p>
-                <p>You can now start a chat and get to know each other.</p>
-              </div>`;
-            sendEmail({ to: fromUser.email, subject: 'Your request was accepted', html }, { kind: 'user' }).catch(() => {});
-          }
-        }
-      }
-    } catch (e) { /* non-blocking */ }
     // Notify admins of new request
     try {
       if (req.io) {
@@ -271,20 +277,50 @@ export async function respond(req, res) {
     if (!isAccepted) {
       await Request.findByIdAndDelete(requestId);
       console.log('Request deleted after rejection:', requestId);
+      // If this was a chat request, remove the pending chat
+      if (reqDoc.type === 'chat') {
+        try {
+          const Chat = (await import('../models/Chat.js')).default;
+          const ids = [String(reqDoc.from), String(reqDoc.to)].sort();
+          const pairKey = `${ids[0]}_${ids[1]}`;
+          const del = await Chat.deleteOne({ pairKey, isPending: true });
+          if (!del.deletedCount) {
+            await Chat.deleteOne({ users: { $all: [reqDoc.from, reqDoc.to] }, isPending: true });
+          }
+        } catch {}
+      }
     }
     
-    // If accepted and not a photo request, create a chat room
+    // If accepted and not a photo request, ensure chat exists and is not pending
     if (isAccepted && reqDoc.type !== 'photo') {
-      const existingChat = await Chat.findOne({
-        users: { $all: [reqDoc.from, reqDoc.to] }
-      });
-      
+      const Chat = (await import('../models/Chat.js')).default;
+      const ids = [String(reqDoc.from), String(reqDoc.to)].sort();
+      const pairKey = `${ids[0]}_${ids[1]}`;
+      let existingChat = await Chat.findOne({ pairKey });
       if (!existingChat) {
-        await Chat.create({
-          users: [reqDoc.from, reqDoc.to],
-          messages: []
-        });
+        // Fallback to legacy lookup then set pairKey
+        existingChat = await Chat.findOne({ users: { $all: [reqDoc.from, reqDoc.to] } });
       }
+      if (!existingChat) {
+        await Chat.create({ users: [reqDoc.from, reqDoc.to], pairKey, isPending: false, messages: [] });
+      } else {
+        if (existingChat.isPending) existingChat.isPending = false;
+        if (!existingChat.pairKey) existingChat.pairKey = pairKey;
+        await existingChat.save();
+      }
+      // Additionally, auto-establish mutual follow (both directions) to emulate Instagram-like connect on accept
+      try {
+        const mkAccepted = async (from, to) => {
+          const ex = await Request.findOne({ from, to, type: 'follow' });
+          if (ex) {
+            if (ex.status !== 'accepted') { ex.status = 'accepted'; await ex.save(); }
+          } else {
+            await Request.create({ from, to, type: 'follow', status: 'accepted' });
+          }
+        };
+        await mkAccepted(reqDoc.from, reqDoc.to);
+        await mkAccepted(reqDoc.to, reqDoc.from);
+      } catch {}
     }
     
     // Real-time notify both users for photo request decisions

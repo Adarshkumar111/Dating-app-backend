@@ -153,6 +153,20 @@ export async function sendMessage(req, res) {
       });
     }
     
+    // If chat is pending, only the requester can send until accepted (unless adminApproved)
+    if (chat.isPending && !adminApproved) {
+      try {
+        const otherUser = chat.users.find(u => String(u._id) !== String(req.user._id));
+        const Request = (await import('../models/Request.js')).default;
+        const pending = await Request.findOne({ type: 'chat', status: 'pending', from: req.user._id, to: otherUser._id });
+        if (!pending) {
+          return res.status(403).json({ message: 'Chat pending approval. You cannot reply until you accept.', pending: true });
+        }
+      } catch (e) {
+        return res.status(403).json({ message: 'Chat pending approval. You cannot reply until you accept.', pending: true });
+      }
+    }
+
     const { messageText, messageType, mediaUrl, mediaDuration } = req.body;
     
     const message = {
@@ -361,6 +375,20 @@ export async function uploadMedia(req, res) {
     if (!chat.users.some(u => String(u) === String(req.user._id))) return res.status(403).json({ message: 'Not in chat' });
     if (chat.isBlocked) return res.status(403).json({ message: 'Chat blocked' });
     
+    // If chat is pending, only the requester can send media until accepted
+    if (chat.isPending) {
+      try {
+        const otherUserId = String(chat.users.find(u => String(u) !== String(req.user._id)));
+        const Request = (await import('../models/Request.js')).default;
+        const pending = await Request.findOne({ type: 'chat', status: 'pending', from: req.user._id, to: otherUserId });
+        if (!pending) {
+          return res.status(403).json({ message: 'Chat pending approval. You cannot reply until you accept.', pending: true });
+        }
+      } catch (e) {
+        return res.status(403).json({ message: 'Chat pending approval. You cannot reply until you accept.', pending: true });
+      }
+    }
+
     if (!req.file) return res.status(400).json({ message: 'No file uploaded' });
     
     const { uploadToImageKit } = await import('../utils/imageUtil.js');

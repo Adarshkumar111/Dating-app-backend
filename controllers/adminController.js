@@ -351,9 +351,9 @@ export async function getPremiumPlans(req, res) {
 
 export async function createPremiumPlan(req, res) {
   try {
-    const { name, tier, duration, price, discount, requestLimit, features } = req.body;
+    const { name, tier, duration, price, discount, requestLimit, features, advancedFeatures } = req.body;
     
-    const plan = new PremiumPlan({
+    const planData = {
       name,
       tier,
       duration,
@@ -361,7 +361,13 @@ export async function createPremiumPlan(req, res) {
       discount: discount || 0,
       requestLimit,
       features: features || []
-    });
+    };
+    
+    if (advancedFeatures) {
+      planData.advancedFeatures = advancedFeatures;
+    }
+    
+    const plan = new PremiumPlan(planData);
     
     await plan.save();
     res.json({ ok: true, plan });
@@ -373,11 +379,16 @@ export async function createPremiumPlan(req, res) {
 export async function updatePremiumPlan(req, res) {
   try {
     const { planId } = req.params;
-    const { name, tier, duration, price, discount, requestLimit, features, isActive } = req.body;
+    const { name, tier, duration, price, discount, requestLimit, features, isActive, advancedFeatures } = req.body;
+    
+    const updateData = { name, tier, duration, price, discount, requestLimit, features, isActive };
+    if (advancedFeatures) {
+      updateData.advancedFeatures = advancedFeatures;
+    }
     
     const plan = await PremiumPlan.findByIdAndUpdate(
       planId,
-      { name, tier, duration, price, discount, requestLimit, features, isActive },
+      updateData,
       { new: true }
     );
     
@@ -405,6 +416,25 @@ export async function deletePremiumPlan(req, res) {
 export async function initializeDefaultData(req, res) {
   try {
     const defaultPlans = [
+      {
+        name: '12 Month Premium',
+        tier: 'diamond',
+        duration: 12,
+        price: 79.99,
+        discount: 35,
+        requestLimit: 150,
+        features: [
+          'Send up to 150 follow requests per day',
+          'Priority customer support',
+          'Advanced search filters',
+          'See who viewed your profile',
+          'Unlimited message storage',
+          'Profile boost feature',
+          'Exclusive diamond badge',
+          'Early access to new features',
+          'Top placement in search results'
+        ]
+      },
       {
         name: '1 Month Premium',
         tier: 'bronze',

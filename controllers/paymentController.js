@@ -33,18 +33,24 @@ export async function createOrderEndpoint(req, res) {
       return res.status(404).json({ message: 'Plan not found' });
     }
 
-    // Create Razorpay order
-    const order = await createOrder(Math.round(plan.price * 100)); // Convert to paise
+    // Apply discount to compute payable amount
+    const discountPct = Number(plan.discount || 0);
+    const rawPrice = Number(plan.price || 0);
+    const finalPrice = Math.max(0, rawPrice - (rawPrice * discountPct / 100));
+    // Create Razorpay order with discounted amount (in paise)
+    const order = await createOrder(Math.round(finalPrice * 100));
 
     res.json({
       orderId: order.id,
-      amount: order.amount,
+      amount: order.amount, // in paise, already discounted
       currency: order.currency,
       key: getRazorpayKeyId(),
       plan: {
         id: plan._id,
         name: plan.name,
-        price: plan.price,
+        price: rawPrice,
+        discount: discountPct,
+        finalPrice,
         duration: plan.duration
       }
     });
@@ -75,12 +81,15 @@ export async function verifyPayment(req, res) {
     }
 
     // Create payment transaction record
+    const discountPct = Number(plan.discount || 0);
+    const rawPrice = Number(plan.price || 0);
+    const finalPrice = Math.max(0, rawPrice - (rawPrice * discountPct / 100));
     const txn = await PaymentTransaction.create({
       user: req.user._id,
       plan: plan._id,
       orderId,
       paymentId,
-      amount: plan.price,
+      amount: finalPrice,
       status: 'paid'
     });
 
@@ -94,7 +103,10 @@ export async function verifyPayment(req, res) {
       isPremium: true,
       premiumExpiresAt: expires,
       premiumPlan: plan._id,
-      premiumTier: plan.tier || undefined
+      premiumTier: plan.tier || undefined,
+      // Reset daily request counters upon (re)activation so user gets full quota immediately
+      requestsToday: 0,
+      requestsTodayAt: new Date()
     });
 
     // Create a system notification for the user (congrats)

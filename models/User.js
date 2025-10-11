@@ -35,7 +35,7 @@ const userSchema = new mongoose.Schema({
   isPremium: { type: Boolean, default: false },
   premiumExpiresAt: { type: Date },
   premiumPlan: { type: mongoose.Schema.Types.ObjectId, ref: 'PremiumPlan' },
-  premiumTier: { type: String, enum: ['bronze', 'silver', 'gold'], default: undefined },
+  premiumTier: { type: String, enum: ['bronze', 'silver', 'gold', 'diamond'], default: undefined },
   requestsToday: { type: Number, default: 0 },
   requestsTodayAt: { type: Date, default: new Date() },
   blockedUsers: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],

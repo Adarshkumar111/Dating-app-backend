@@ -21,6 +21,10 @@ const messageSchema = new mongoose.Schema({
 
 const chatSchema = new mongoose.Schema({
   users: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+  // Unique key for the user pair (sorted). Prevents duplicate chats per pair regardless of creation order.
+  pairKey: { type: String, index: true, unique: true, sparse: true },
+  // When true, this chat is a pending request (created on chat request send). Messages should be disabled until accepted.
+  isPending: { type: Boolean, default: false },
   isBlocked: { type: Boolean, default: false },
   blockedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   messages: [messageSchema]

@@ -6,6 +6,35 @@ export async function me(req, res) {
   const u = req.user.toObject();
   delete u.passwordHash;
   delete u.resetPasswordToken;
+  // Compute request limits and remaining (read-only)
+  try {
+    const today = new Date();
+    const todayStart = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+    const settingsMod = await import('../models/Settings.js');
+    const PremiumPlanMod = await import('../models/PremiumPlan.js');
+    const Settings = settingsMod.default;
+    const PremiumPlan = PremiumPlanMod.default;
+    const settings = await Settings.find();
+    const settingsObj = {};
+    settings.forEach(s => { settingsObj[s.key] = s.value; });
+    const freeLimit = Number(settingsObj.freeUserRequestLimit) || 2;
+    let limit = freeLimit;
+    const hasActivePremium = u.isPremium && u.premiumExpiresAt && new Date(u.premiumExpiresAt) > today;
+    if (hasActivePremium) {
+      let premiumLimit = Number(settingsObj.premiumUserRequestLimit) || undefined;
+      if (u.premiumPlan) {
+        try {
+          const plan = await PremiumPlan.findById(u.premiumPlan).select('requestLimit');
+          if (typeof plan?.requestLimit === 'number' && plan.requestLimit > 0) premiumLimit = plan.requestLimit;
+        } catch {}
+      }
+      limit = (typeof premiumLimit === 'number' && premiumLimit > 0) ? premiumLimit : 20;
+    }
+    const effectiveTodayCount = (!u.requestsTodayAt || new Date(u.requestsTodayAt) < todayStart) ? 0 : (u.requestsToday || 0);
+    const remaining = Math.max(0, limit - effectiveTodayCount);
+    u.requestsLimit = limit;
+    u.requestsRemaining = remaining;
+  } catch {}
   // User can see their own contact and email
   res.json(u);
 }
@@ -115,6 +144,11 @@ export async function list(req, res) {
     User.countDocuments(baseQuery)
   ]);
   
+  // Check if viewing user is Diamond tier
+  const viewingUser = await User.findById(req.user._id).populate('premiumPlan');
+  const isDiamond = viewingUser?.isPremium && String(viewingUser?.premiumTier).toLowerCase() === 'diamond';
+  const diamondFeatures = isDiamond && viewingUser?.premiumPlan?.advancedFeatures ? viewingUser.premiumPlan.advancedFeatures : null;
+  
   // For each user, check request status (chat vs photo) and respect public profiles
   const itemsWithStatus = await Promise.all(items.map(async (item) => {
     const [chatReq, photoReq] = await Promise.all([
@@ -144,7 +178,11 @@ export async function list(req, res) {
     const isChatConnected = !!(chatReq && chatReq.status === 'accepted');
     const isPhotoAllowed = !!(photoReq && photoReq.status === 'accepted');
     const isPublic = !!item.isPublic;
-    const canSeePhotos = isPublic || (isChatConnected && isPhotoAllowed);
+    
+    // Diamond users with permissions can see private profiles and photos
+    const canViewPrivate = isDiamond && diamondFeatures?.viewAllUsers;
+    const canViewDiamondPhotos = isDiamond && diamondFeatures?.viewAllPhotos;
+    const canSeePhotos = isPublic || (isChatConnected && isPhotoAllowed) || canViewDiamondPhotos;
     
     // Respect admin display flags for basic fields even if not connected.
     // Do NOT force-hide age/location here; final enforcement below uses displayFlags.
@@ -203,42 +241,37 @@ export async function getFriends(req, res) {
   
   try {
     const Chat = (await import('../models/Chat.js')).default;
+    const UserModel = (await import('../models/User.js')).default;
     
-    // Find all accepted requests
-    const acceptedRequests = await Request.find({
-      type: { $in: ['follow', 'chat', 'both'] },
-      $or: [
-        { from: req.user._id, status: 'accepted' },
-        { to: req.user._id, status: 'accepted' }
-      ]
-    }).populate('from to', 'name profilePhoto about age location');
-    
-    const friendsData = await Promise.all(acceptedRequests.map(async (request) => {
-      // Get the other user
-      const friend = String(request.from._id) === String(req.user._id) ? request.to : request.from;
-      
-      // Find chat between users
-      const chat = await Chat.findOne({
-        users: { $all: [req.user._id, friend._id] }
-      });
-      
-      let unreadCount = 0;
-      let isBlocked = false;
-      let blockedBy = null;
-      
-      if (chat) {
-        // Count unread messages (not seen by current user and not sent by current user)
-        unreadCount = chat.messages.filter(m => 
-          String(m.sender) !== String(req.user._id) && 
-          !m.seenBy.includes(req.user._id) &&
-          !m.deletedFor.includes(req.user._id) &&
-          !m.deletedForEveryone
-        ).length;
-        
-        isBlocked = chat.isBlocked;
-        blockedBy = chat.blockedBy;
+    // Fetch all chats the user participates in (includes pending)
+    const chats = await Chat.find({ users: req.user._id })
+      .sort({ updatedAt: -1 })
+      .lean();
+
+    const friendsData = await Promise.all(chats.map(async (chat) => {
+      // Find the other participant
+      const otherUserId = String(chat.users.find(u => String(u) !== String(req.user._id)));
+      const friend = await UserModel.findById(otherUserId).select('name profilePhoto about age location');
+      if (!friend) return null;
+
+      // Unread count for current user (ignore deleted/forEveryone)
+      const unreadCount = (chat.messages || []).filter(m => 
+        String(m.sender) !== String(req.user._id) &&
+        !(m.deletedFor || []).some(id => String(id) === String(req.user._id)) &&
+        !m.deletedForEveryone &&
+        !(m.seenBy || []).some(id => String(id) === String(req.user._id))
+      ).length;
+
+      // Last message preview
+      const lastMessage = (chat.messages || []).length ? chat.messages[chat.messages.length - 1] : null;
+
+      // If pending, check if current user is recipient of a pending chat request to enable accept/reject buttons
+      let pendingRequestId = null;
+      if (chat.isPending) {
+        const pendingReq = await Request.findOne({ type: 'chat', from: otherUserId, to: req.user._id, status: 'pending' }).select('_id');
+        pendingRequestId = pendingReq?._id || null;
       }
-      
+
       return {
         _id: friend._id,
         name: friend.name,
@@ -247,13 +280,22 @@ export async function getFriends(req, res) {
         age: friend.age,
         location: friend.location,
         unreadCount,
-        isBlocked,
-        blockedBy: blockedBy ? String(blockedBy) : null,
-        chatId: chat?._id
+        isBlocked: !!chat.isBlocked,
+        blockedBy: chat.blockedBy ? String(chat.blockedBy) : null,
+        chatId: chat._id,
+        isPending: !!chat.isPending,
+        pendingRequestId,
+        lastMessage: lastMessage ? {
+          text: lastMessage.text,
+          messageType: lastMessage.messageType,
+          sentAt: lastMessage.sentAt,
+          sender: String(lastMessage.sender)
+        } : null
       };
     }));
-    
-    res.json({ friends: friendsData });
+
+    // Filter nulls and respond
+    res.json({ friends: friendsData.filter(Boolean) });
   } catch (e) {
     console.error('Get friends error:', e);
     res.status(400).json({ message: e.message });
@@ -267,6 +309,35 @@ export async function getProfile(req, res) {
   const isOwnProfile = String(req.user._id) === String(target._id);
   const isAdmin = req.user.isAdmin;
   const targetIsPublic = !!target.isPublic;
+  
+  // Load viewer premium plan and advanced permissions (for all tiers)
+  const viewingUser = await User.findById(req.user._id).populate('premiumPlan');
+  const viewerTier = String(viewingUser?.premiumTier || '').toLowerCase();
+  const isPremiumViewerRaw = !!viewingUser?.isPremium;
+  const isPremiumActive = isPremiumViewerRaw && viewingUser?.premiumExpiresAt && new Date(viewingUser.premiumExpiresAt) > new Date();
+  let planFeatures = null;
+  if (isPremiumActive) {
+    if (viewingUser?.premiumPlan?.advancedFeatures) {
+      planFeatures = viewingUser.premiumPlan.advancedFeatures;
+    } else if (viewerTier) {
+      try {
+        const PremiumPlan = (await import('../models/PremiumPlan.js')).default;
+        const tierPlan = await PremiumPlan.findOne({ tier: viewerTier }).select('advancedFeatures');
+        if (tierPlan?.advancedFeatures) planFeatures = tierPlan.advancedFeatures;
+      } catch {}
+    }
+  }
+  
+  console.log('Profile View Debug:', {
+    viewingUserId: req.user._id,
+    viewingUserTier: viewingUser?.premiumTier,
+    isPremium: viewingUser?.isPremium,
+    isDiamond: viewerTier === 'diamond',
+    hasAdvancedFeatures: !!planFeatures,
+    targetIsPublic,
+    targetId: target._id
+  });
+  
   // Hide admin profiles from regular users
   if (target.isAdmin && !isOwnProfile && !isAdmin) {
     return res.status(404).json({ message: 'Not found' });
@@ -320,26 +391,84 @@ export async function getProfile(req, res) {
   }
   
   // Privacy: if profile is public, allow viewing details/photos without connection.
+  // Diamond users with permissions can see private profiles based on admin settings
   // Otherwise (private), hide details until chat connected; hide photos until chat connected AND photo permission
   if (!isOwnProfile && !isAdmin) {
-    if (!targetIsPublic && !connection) {
+    const canViewPrivate = !!(planFeatures && planFeatures.viewAllUsers);
+    const canViewPhotos = !!(planFeatures && planFeatures.viewAllPhotos);
+
+    // Base privacy for non-diamond or diamond without private access
+    if (!targetIsPublic && !connection && !canViewPrivate) {
       data.age = undefined;
       data.location = undefined;
       data.education = undefined;
       data.occupation = undefined;
+      data.fatherName = undefined;
+      data.motherName = undefined;
+      data.dateOfBirth = undefined;
+      data.maritalStatus = undefined;
+      data.disability = undefined;
+      data.countryOfOrigin = undefined;
+      data.state = undefined;
+      data.district = undefined;
+      data.city = undefined;
+      data.area = undefined;
+      data.languagesKnown = undefined;
+      data.numberOfSiblings = undefined;
+      data.about = undefined;
+      data.lookingFor = undefined;
     }
-    if (!targetIsPublic && !(connection && photoPermission)) {
+
+    // Photos privacy
+    if (!targetIsPublic && !(connection && photoPermission) && !canViewPhotos) {
       data.profilePhoto = undefined;
       data.galleryImages = undefined;
+    }
+
+    // ALWAYS apply field-level restrictions if premium viewer and canViewFields present,
+    // irrespective of public/private status, so admin controls exactly what premium sees.
+    if (isPremiumActive && planFeatures?.canViewFields) {
+      const fields = planFeatures.canViewFields;
+      if (!fields.name) data.name = undefined;
+      if (!fields.age) data.age = undefined;
+      if (!fields.dateOfBirth) data.dateOfBirth = undefined;
+      if (!fields.fatherName) data.fatherName = undefined;
+      if (!fields.motherName) data.motherName = undefined;
+      if (!fields.gender) data.gender = undefined;
+      if (!fields.maritalStatus) data.maritalStatus = undefined;
+      if (!fields.disability) data.disability = undefined;
+      if (!fields.countryOfOrigin) data.countryOfOrigin = undefined;
+      if (!fields.state) data.state = undefined;
+      if (!fields.district) data.district = undefined;
+      if (!fields.city) data.city = undefined;
+      if (!fields.area) data.area = undefined;
+      if (!fields.education) data.education = undefined;
+      if (!fields.occupation) data.occupation = undefined;
+      if (!fields.languagesKnown) data.languagesKnown = undefined;
+      if (!fields.numberOfSiblings) data.numberOfSiblings = undefined;
+      if (!fields.about) data.about = undefined;
+      if (!fields.lookingFor) data.lookingFor = undefined;
+      // Photos also follow admin field flags in addition to canViewPhotos
+      if (!fields.profilePhoto) data.profilePhoto = undefined;
+      if (!fields.galleryImages) data.galleryImages = undefined;
     }
   }
   
   // Common flags
   data.isConnected = !!connection;
-  // Public profiles expose photos; otherwise require photo permission
-  data.isPhotoAccessible = targetIsPublic || !!photoPermission;
+  // Public profiles expose photos; otherwise require photo permission (or premium plan with permissions)
+  data.isPhotoAccessible = targetIsPublic || !!photoPermission || !!(planFeatures && planFeatures.viewAllPhotos);
   data.isBlockedByMe = isBlockedByMe;
   data.isBlockedByThem = isBlockedByThem;
+  // New generic viewer flags
+  data.viewerIsPremium = isPremiumActive;
+  data.viewerTier = viewerTier;
+  data.viewerHasPrivateAccess = !!(planFeatures && planFeatures.viewAllUsers);
+  data.viewerCanSeePhotos = !!(planFeatures && planFeatures.viewAllPhotos);
+  data.viewerCanMessageWithoutFollow = !!(planFeatures && planFeatures.canMessageWithoutFollow);
+  // Backwards compatible flags for existing client usage
+  data.viewerIsDiamond = viewerTier === 'diamond';
+  data.viewerHasDiamondAccess = !!(planFeatures && (planFeatures.viewAllUsers || planFeatures.viewAllPhotos));
 
   // Apply admin-controlled profile display flags for sensitive fields when connected
   if (!isOwnProfile && !isAdmin && data.isConnected) {
