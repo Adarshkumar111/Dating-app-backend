@@ -4,6 +4,7 @@ import Settings from '../models/Settings.js';
 import Chat from '../models/Chat.js';
 import { sendEmail } from '../utils/emailUtil.js';
 import PremiumPlan from '../models/PremiumPlan.js';
+import { invalidateNotificationCache, invalidateAdminNotificationCache } from '../services/redisNotificationService.js';
 
 export async function sendRequest(req, res) {
   // Prevent admins from sending follow requests
@@ -127,15 +128,18 @@ export async function sendRequest(req, res) {
         to: toUserId, 
         type: reqType 
       });
+      
+      // Invalidate notification cache for the recipient and admin
+      await Promise.all([
+        invalidateNotificationCache(toUserId),
+        invalidateAdminNotificationCache()
+      ]);
     } catch (err) {
-      // Gracefully handle duplicate key error from legacy index {from,to}
-      if (err && err.code === 11000) {
+      console.error('Request creation error:', err);
+      // Check if duplicate error
+      if (err.code === 11000) {
         const same = await Request.findOne({ from: req.user._id, to: toUserId });
         if (same) {
-          if (same.type !== reqType) {
-            same.type = 'both';
-            await same.save();
-          }
           return res.json({ message: 'Request already exists', status: same.status });
         }
         const opp = await Request.findOne({ from: toUserId, to: req.user._id });
@@ -151,6 +155,8 @@ export async function sendRequest(req, res) {
       }
       throw err;
     }
+    
+    console.log('Request created:', created);
     
     // If this is a chat request, ensure a pending chat exists so both users see the thread
     try {
@@ -260,6 +266,13 @@ export async function respond(req, res) {
     reqDoc.status = isAccepted ? 'accepted' : 'rejected';
     await reqDoc.save();
     
+    // Invalidate cache for both sender and recipient, and admin
+    await Promise.all([
+      invalidateNotificationCache(reqDoc.from),
+      invalidateNotificationCache(reqDoc.to),
+      invalidateAdminNotificationCache()
+    ]);
+    
     // Create notification for the sender (User A)
     const Notification = (await import('../models/Notification.js')).default;
     await Notification.create({
@@ -272,6 +285,24 @@ export async function respond(req, res) {
       read: false,
       data: { relatedUser: req.user._id, requestId: String(reqDoc._id), kind: isAccepted ? 'request_accepted' : 'request_rejected' }
     });
+    
+    // Send email notification to the sender
+    try {
+      const fromUser = await User.findById(reqDoc.from).select('email name');
+      if (fromUser?.email) {
+        const requestTypeText = reqDoc.type === 'photo' ? 'photo access request' : reqDoc.type === 'chat' ? 'chat request' : 'follow request';
+        const html = `
+          <div style="font-family:Arial,sans-serif;line-height:1.6">
+            <h2>M Nikah</h2>
+            <h3 style="color: ${isAccepted ? '#22c55e' : '#ef4444'};">${isAccepted ? '✅' : '❌'} ${isAccepted ? 'Request Accepted' : 'Request Rejected'}</h3>
+            <p><strong>${req.user.name}</strong> ${isAccepted ? 'accepted' : 'rejected'} your ${requestTypeText}.</p>
+            ${isAccepted ? '<p>You can now connect with them. Log in to start chatting!</p>' : '<p>You can send another request if you wish.</p>'}
+          </div>`;
+        await sendEmail({ to: fromUser.email, subject: isAccepted ? 'Request Accepted' : 'Request Rejected', html }, { kind: 'system' });
+      }
+    } catch (e) {
+      console.warn('Failed to send request response email:', e.message);
+    }
     
     // If rejected, delete the request so User A can send again
     if (!isAccepted) {

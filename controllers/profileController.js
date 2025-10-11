@@ -1,6 +1,7 @@
 import bcrypt from 'bcryptjs';
 import User from '../models/User.js';
 import { uploadToImageKit } from '../utils/imageUtil.js';
+import AppSettings from '../models/AppSettings.js';
 
 export async function updateProfile(req, res) {
   try {
@@ -44,45 +45,100 @@ export async function updateProfile(req, res) {
 
     // Apply visibility change immediately if provided
     let visibilityChanged = false;
+    let visibilityStatus = null;
     if (typeof req.body.isPublic !== 'undefined') {
-      const isPublic = String(req.body.isPublic).toLowerCase() === 'true' || req.body.isPublic === true;
+      // Get global visibility mode from admin settings
+      const appSettings = await AppSettings.findOne();
+      const globalMode = appSettings?.profileIdVisibilityMode || 'public';
+      
+      let isPublic = String(req.body.isPublic).toLowerCase() === 'true' || req.body.isPublic === true;
+      
+      // Enforce admin's global mode
+      if (globalMode === 'private') {
+        isPublic = false; // Force private when admin sets global to private
+      }
+      
       // Update directly on user document
       await User.updateOne({ _id: userId }, { $set: { isPublic } });
       visibilityChanged = true;
+      visibilityStatus = isPublic ? 'Public' : 'Private';
+      
+      // Create system notification for admin (not pending edit - just info)
+      const Notification = (await import('../models/Notification.js')).default;
+      const admins = await User.find({ isAdmin: true }).select('_id');
+      if (admins.length > 0) {
+        const adminNotifications = admins.map(admin => ({
+          userId: admin._id,
+          type: 'admin_message',
+          title: 'Profile Visibility Changed',
+          message: `${req.user.name} changed profile visibility to ${visibilityStatus}`,
+          read: false,
+          data: { userId: String(userId), action: 'visibility_changed', visibility: visibilityStatus }
+        }));
+        await Notification.insertMany(adminNotifications);
+        
+        // Invalidate admin notification cache
+        const { invalidateAdminNotificationCache } = await import('../services/redisNotificationService.js');
+        await invalidateAdminNotificationCache();
+        
+        // Emit real-time event to admins
+        if (req.io) {
+          admins.forEach(admin => {
+            req.io.emit(`user:${admin._id}`, {
+              kind: 'user:visibility_changed',
+              message: `${req.user.name} changed profile visibility to ${visibilityStatus}`,
+              userId: String(userId),
+              visibility: visibilityStatus
+            });
+          });
+        }
+      }
     }
 
-    // Build activity log entry
-    const activityLog = { action: 'profile_edit_submitted', timestamp: new Date(), metadata: { changedKeys: Object.keys(pending) } };
+    // Only create pending edits if there are actual changes (not just visibility)
+    const hasPendingChanges = Object.keys(pending).length > 0;
+    
+    if (hasPendingChanges) {
+      // Build activity log entry
+      const activityLog = { action: 'profile_edit_submitted', timestamp: new Date(), metadata: { changedKeys: Object.keys(pending) } };
 
-    // Single atomic update to avoid parallel save conflicts
-    const updatedUser = await User.findByIdAndUpdate(
-      userId,
-      {
-        $set: {
-          pendingEdits: pending,
-          hasPendingEdits: true
+      // Single atomic update to avoid parallel save conflicts
+      const updatedUser = await User.findByIdAndUpdate(
+        userId,
+        {
+          $set: {
+            pendingEdits: pending,
+            hasPendingEdits: true
+          },
+          $push: {
+            activityLogs: activityLog
+          }
         },
-        $push: {
-          activityLogs: activityLog
+        { new: true }
+      );
+
+      // Notify admins in real-time (best-effort)
+      try {
+        if (req.io) {
+          req.io.emit('admin:pendingEdit', {
+            userId: updatedUser._id,
+            name: updatedUser.name,
+            changedKeys: Object.keys(pending)
+          });
         }
-      },
-      { new: true }
-    );
+      } catch {}
+    }
 
-    // Notify admins in real-time (best-effort)
-    try {
-      if (req.io) {
-        req.io.emit('admin:pendingEdit', {
-          userId: updatedUser._id,
-          name: updatedUser.name,
-          changedKeys: Object.keys(pending)
-        });
-      }
-    } catch {}
-
-    const msg = visibilityChanged
-      ? 'Visibility updated. Other changes submitted for admin approval'
-      : 'Edits submitted for admin approval';
+    // Build response message
+    let msg = 'No changes detected';
+    if (visibilityChanged && hasPendingChanges) {
+      msg = 'Visibility updated immediately. Other changes submitted for admin approval';
+    } else if (visibilityChanged) {
+      msg = 'Profile visibility updated successfully';
+    } else if (hasPendingChanges) {
+      msg = 'Changes submitted for admin approval';
+    }
+    
     return res.json({ message: msg });
   } catch (e) {
     console.error('Update profile error:', e);

@@ -89,6 +89,9 @@ const appSettingsSchema = new mongoose.Schema({
     images: { type: [String], default: [] }, // up to 6 URLs
     updatedAt: { type: Date }
   }
+  ,
+  // Profile ID visibility control
+  profileIdVisibilityMode: { type: String, enum: ['public', 'private'], default: 'public' }
 
 }, { timestamps: true });
 

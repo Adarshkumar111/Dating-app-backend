@@ -696,6 +696,23 @@ export async function approveProfileEdit(req, res) {
       });
     }
     
+    // Send email notification to user
+    if (user.email) {
+      try {
+        const html = `
+          <div style="font-family:Arial,sans-serif;line-height:1.6">
+            <h2>M Nikah</h2>
+            <h3 style="color: #22c55e;">✅ Profile Approved</h3>
+            <p>Great news! Your profile changes have been approved by admin.</p>
+            <p>Your updated profile is now live and visible to other users.</p>
+            <p>Log in to view your profile and continue connecting.</p>
+          </div>`;
+        await sendEmail({ to: user.email, subject: 'Profile Changes Approved', html }, { kind: 'system' });
+      } catch (e) {
+        console.warn('Failed to send profile approval email:', e.message);
+      }
+    }
+    
     res.json({ ok: true, message: 'Profile edit approved' });
   } catch (e) {
     res.status(400).json({ message: e.message });
@@ -732,13 +749,21 @@ export async function rejectProfileEdit(req, res) {
       });
     }
     
-    // Optionally send email notification with reason
-    if (user.email && reason) {
-      await sendEmail(
-        user.email,
-        'Profile Edit Rejected',
-        `Your profile edit request has been rejected. Reason: ${reason}`
-      );
+    // Send email notification with reason
+    if (user.email) {
+      try {
+        const html = `
+          <div style="font-family:Arial,sans-serif;line-height:1.6">
+            <h2>M Nikah</h2>
+            <h3 style="color: #ef4444;">❌ Profile Changes Rejected</h3>
+            <p>Your profile edit request has been rejected by admin.</p>
+            ${reason ? `<p><strong>Reason:</strong> ${reason}</p>` : ''}
+            <p>Please review the changes and resubmit if needed.</p>
+          </div>`;
+        await sendEmail({ to: user.email, subject: 'Profile Changes Rejected', html }, { kind: 'system' });
+      } catch (e) {
+        console.warn('Failed to send profile rejection email:', e.message);
+      }
     }
     
     res.json({ ok: true, message: 'Profile edit rejected' });
@@ -949,6 +974,10 @@ export async function sendAdminNotification(req, res) {
     }));
     
     await Notification.insertMany(notifications);
+    
+    // Invalidate notification cache for all target users
+    const { invalidateNotificationCache } = await import('../services/redisNotificationService.js');
+    await Promise.all(targetUserIds.map(userId => invalidateNotificationCache(userId)));
     
     // Emit socket events to notify users in real-time
     if (req.io) {

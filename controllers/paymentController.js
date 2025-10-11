@@ -109,55 +109,77 @@ export async function verifyPayment(req, res) {
       requestsTodayAt: new Date()
     });
 
-    // Create a system notification for the user (congrats)
+    // Create congratulations notification for the user
     try {
       await Notification.create({
         userId: req.user._id,
         type: 'system',
-        title: '🎉 Premium Activated',
-        message: `Congratulations! Your ${String(plan.tier || 'premium').toUpperCase()} plan is active for ${plan.duration} day(s).`,
+        title: '🎉 Premium Activated!',
+        message: `Congratulations! Your ${String(plan.tier || 'PREMIUM').toUpperCase()} plan is now active for ${plan.duration} day(s). Enjoy unlimited features!`,
         read: false,
         data: { kind: 'premium:activated', planId: plan._id, tier: plan.tier, duration: plan.duration }
       });
-    } catch {}
+    } catch (e) {
+      console.warn('Failed to create user premium notification:', e.message);
+    }
+
+    // Create notification for all admins about premium purchase
+    try {
+      const admins = await User.find({ isAdmin: true }).select('_id');
+      if (admins.length > 0) {
+        const adminNotifications = admins.map(admin => ({
+          userId: admin._id,
+          type: 'admin_message',
+          title: '💳 Premium Purchase',
+          message: `${req.user.name || 'A user'} purchased ${String(plan.tier || 'PREMIUM').toUpperCase()} plan (${plan.duration} days) for ₹${finalPrice}`,
+          read: false,
+          data: { 
+            kind: 'premium:purchase', 
+            userId: String(req.user._id),
+            planId: String(plan._id),
+            tier: plan.tier,
+            amount: finalPrice,
+            duration: plan.duration
+          }
+        }));
+        await Notification.insertMany(adminNotifications);
+        
+        // Invalidate admin notification cache and user cache
+        const { invalidateNotificationCache, invalidateAdminNotificationCache } = await import('../services/redisNotificationService.js');
+        await Promise.all([
+          invalidateNotificationCache(req.user._id),
+          invalidateAdminNotificationCache()
+        ]);
+      }
+    } catch (e) {
+      console.warn('Failed to create admin premium notification:', e.message);
+    }
 
     // Emit socket events: to user and to admins
     try {
       if (req.io) {
         // Notify the user channel
-        req.io.emit(`user:${req.user._id}`, { kind: 'premium:activated', tier: String(plan.tier || '').toLowerCase(), duration: plan.duration });
+        req.io.emit(`user:${req.user._id}`, { 
+          kind: 'premium:activated', 
+          tier: String(plan.tier || '').toLowerCase(), 
+          duration: plan.duration 
+        });
+        
         // Notify admins about purchase
         const admins = await User.find({ isAdmin: true }).select('_id');
         admins.forEach(a => {
-          req.io.emit('adminPayment', { userId: String(req.user._id), name: req.user.name, tier: String(plan.tier || '').toLowerCase() });
+          req.io.emit(`user:${a._id}`, { 
+            kind: 'premium:purchase',
+            userId: String(req.user._id), 
+            name: req.user.name, 
+            tier: String(plan.tier || '').toUpperCase(),
+            amount: finalPrice
+          });
         });
       }
-    } catch {}
-
-    // Create a system notification for the user (congrats)
-    try {
-      await Notification.create({
-        userId: req.user._id,
-        type: 'system',
-        title: '🎉 Premium Activated',
-        message: `Congratulations! Your ${String(plan.tier || 'premium').toUpperCase()} plan is active for ${plan.duration} day(s).`,
-        read: false,
-        data: { kind: 'premium:activated', planId: plan._id, tier: plan.tier, duration: plan.duration }
-      });
-    } catch {}
-
-    // Emit socket events: to user and to admins
-    try {
-      if (req.io) {
-        // Notify the user channel
-        req.io.emit(`user:${req.user._id}`, { kind: 'premium:activated', tier: String(plan.tier || '').toLowerCase(), duration: plan.duration });
-        // Notify admins about purchase
-        const admins = await User.find({ isAdmin: true }).select('_id');
-        admins.forEach(a => {
-          req.io.emit('adminPayment', { userId: String(req.user._id), name: req.user.name, tier: String(plan.tier || '').toLowerCase() });
-        });
-      }
-    } catch {}
+    } catch (e) {
+      console.warn('Failed to emit premium socket events:', e.message);
+    }
 
     res.json({
       success: true,
@@ -204,8 +226,43 @@ export async function subscribe(req, res) {
       isPremium: true,
       premiumExpiresAt: expires,
       premiumPlan: plan._id,
-      premiumTier: plan.tier || undefined
+      premiumTier: plan.tier || undefined,
+      requestsToday: 0,
+      requestsTodayAt: new Date()
     });
+
+    // Create congratulations notification for user
+    try {
+      await Notification.create({
+        userId: req.user._id,
+        type: 'system',
+        title: '🎉 Premium Activated!',
+        message: `Congratulations! Your ${String(plan.tier || 'PREMIUM').toUpperCase()} plan is now active for ${plan.duration} day(s).`,
+        read: false
+      });
+    } catch {}
+
+    // Notify admins
+    try {
+      const admins = await User.find({ isAdmin: true }).select('_id');
+      if (admins.length > 0) {
+        const adminNotifications = admins.map(admin => ({
+          userId: admin._id,
+          type: 'admin_message',
+          title: '💳 Premium Purchase',
+          message: `${req.user.name} purchased ${String(plan.tier || 'PREMIUM').toUpperCase()} plan`,
+          read: false
+        }));
+        await Notification.insertMany(adminNotifications);
+        
+        // Invalidate caches
+        const { invalidateNotificationCache, invalidateAdminNotificationCache } = await import('../services/redisNotificationService.js');
+        await Promise.all([
+          invalidateNotificationCache(req.user._id),
+          invalidateAdminNotificationCache()
+        ]);
+      }
+    } catch {}
 
     res.json({
       ok: true,

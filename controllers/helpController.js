@@ -1,6 +1,7 @@
 import HelpRequest from '../models/HelpRequest.js';
 import Notification from '../models/Notification.js';
 import Chat from '../models/Chat.js';
+import { invalidateNotificationCache, invalidateAdminNotificationCache } from '../services/redisNotificationService.js';
 
 export async function sendHelpRequest(req, res) {
   try {
@@ -11,6 +12,9 @@ export async function sendHelpRequest(req, res) {
       issueDescription,
       status: 'pending'
     });
+    
+    // Invalidate admin notification cache
+    await invalidateAdminNotificationCache();
 
     // Notify admins via socket to refresh notifications list
     try { req.io.emit('adminRequest', { kind: 'help:new', id: String(help._id) }); } catch {}
@@ -44,6 +48,12 @@ export async function respondHelp(req, res) {
       help.status = 'approved';
       help.adminId = req.user._id;
       await help.save();
+      
+      // Invalidate cache for user and admin
+      await Promise.all([
+        invalidateNotificationCache(help.from),
+        invalidateAdminNotificationCache()
+      ]);
       // Ensure chat between admin and user is unblocked (in case it was previously closed)
       try {
         const chat = await Chat.findOne({ users: { $all: [help.from, help.adminId] } });
@@ -67,6 +77,12 @@ export async function respondHelp(req, res) {
     } else if (action === 'reject') {
       help.status = 'rejected';
       await help.save();
+      
+      // Invalidate cache for user and admin
+      await Promise.all([
+        invalidateNotificationCache(help.from),
+        invalidateAdminNotificationCache()
+      ]);
       await Notification.create({
         userId: help.from,
         type: 'system',
@@ -78,6 +94,12 @@ export async function respondHelp(req, res) {
     } else if (action === 'resolve') {
       help.status = 'resolved';
       await help.save();
+      
+      // Invalidate cache for user and admin
+      await Promise.all([
+        invalidateNotificationCache(help.from),
+        invalidateAdminNotificationCache()
+      ]);
       // Block chat between admin and user (if exists)
       try {
         let chat = await Chat.findOne({ users: { $all: [help.from, help.adminId] } });
